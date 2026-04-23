@@ -11,7 +11,7 @@ async function callApi(method, path, body) {
   const headers = { "Content-Type": "application/json" };
   if (API_KEY) headers["Authorization"] = `Bearer ${API_KEY}`;
 
-  const opts = { method, headers };
+  const opts = { method, headers, signal: AbortSignal.timeout(30_000) };
   if (body) opts.body = JSON.stringify(body);
 
   const res = await fetch(url, opts);
