@@ -6,6 +6,14 @@ const API_URL = process.env.CHATLYTICS_API_URL || "http://localhost:8050";
 const API_KEY = process.env.CHATLYTICS_API_KEY || "";
 const DEFAULT_SESSION = process.env.CHATLYTICS_SESSION || "";
 
+// IN-01: Warn on missing env vars at startup
+if (!process.env.CHATLYTICS_API_URL) {
+  console.error("[chatlytics-mcp] Warning: CHATLYTICS_API_URL not set — using default http://localhost:8050");
+}
+if (!process.env.CHATLYTICS_API_KEY) {
+  console.error("[chatlytics-mcp] Warning: CHATLYTICS_API_KEY not set — API calls will be unauthenticated");
+}
+
 async function callApi(method, path, body) {
   const url = `${API_URL}${path}`;
   const headers = { "Content-Type": "application/json" };
