@@ -38,14 +38,24 @@ You'll need it in step 4.
 
 ## 3. Install the plugin
 
-One command in your terminal:
+Two commands in your terminal:
 
 ```bash
-claude plugin install https://github.com/omernesh/chatlytics-claude-code
+claude plugin marketplace add omernesh/chatlytics-claude-code
+claude plugin install chatlytics@chatlytics-claude-code
 ```
 
-This pulls the manifest, the MCP server, the skill, and runs `npm install`
-for the server's dependencies automatically.
+The first command registers the GitHub repo as a Claude Code marketplace.
+The second installs the `chatlytics` plugin from it. The MCP server ships
+as a single self-contained bundle — **no `npm install` needed**.
+
+Verify it landed:
+
+```bash
+claude plugin list
+```
+
+You should see `chatlytics@chatlytics-claude-code` with status `✔ enabled`.
 
 ---
 

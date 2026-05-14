@@ -6,6 +6,26 @@
 
 All notable changes to the Chatlytics Claude Code plugin are documented here.
 
+## 1.1.1 — 2026-05-14
+
+### Fixed (E2E install-test findings)
+
+- **`.claude-plugin/marketplace.json` was missing.** Without it,
+  `claude plugin marketplace add` fails with "Marketplace file not found".
+  Added single-plugin marketplace manifest pointing at `./` (self-marketplace
+  pattern like `n8n-mcp-skills`). Install flow now:
+  `claude plugin marketplace add omernesh/chatlytics-claude-code` →
+  `claude plugin install chatlytics@chatlytics-claude-code`.
+- **`repository` field was an object, not a string.** Claude Code's plugin
+  validator rejected `{type, url}` shape. Flattened to a single URL string.
+- **MCP server failed to start after install** because `claude plugin install`
+  does not run `npm install`. Replaced the post-install dependency-fetch
+  pattern with a **single bundled MCP server** (`servers/chatlytics-mcp.bundle.js`,
+  ~715KB) produced via esbuild. Beta users now install + run with zero
+  `npm install` steps. The `npm install` story remains for plugin developers
+  rebuilding the bundle (`npm run build`).
+- README + QUICKSTART updated with the correct two-step install commands.
+
 ## 1.1.0 — 2026-05-14
 
 First public release as a dedicated repo (`omernesh/chatlytics-claude-code`),

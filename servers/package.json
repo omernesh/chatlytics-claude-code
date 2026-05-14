@@ -4,10 +4,14 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "esbuild chatlytics-mcp.js --bundle --platform=node --target=node18 --format=esm --outfile=chatlytics-mcp.bundle.js --packages=bundle",
     "test": "node test/smoke.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
     "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
   }
 }

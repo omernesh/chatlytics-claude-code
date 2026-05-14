@@ -14,26 +14,29 @@ The plugin ships:
 
 ## Install
 
-The simplest path is via Claude Code's plugin manager:
+Two-step install via Claude Code's plugin manager:
 
 ```bash
-claude plugin install github:omernesh/chatlytics-claude-code
+claude plugin marketplace add omernesh/chatlytics-claude-code
+claude plugin install chatlytics@chatlytics-claude-code
 ```
 
-That fetches the manifest, MCP server, and skill into your Claude Code plugin
-directory and runs `npm install` for the MCP server (via the plugin's
-`postinstall` hook).
+That fetches a single self-contained bundled MCP server
+(`servers/chatlytics-mcp.bundle.js`, ~715KB) plus the skill. **No `npm install`
+needed** — the bundle ships all dependencies inline.
 
 ### Local / development install
 
-If you've cloned this repo manually:
+If you're working on the plugin itself:
 
 ```bash
 git clone https://github.com/omernesh/chatlytics-claude-code.git
 cd chatlytics-claude-code
-npm install        # installs servers/ deps via the postinstall hook
-claude plugin install .
+cd servers && npm install && npm run build   # rebuild bundle after source edits
 ```
+
+The `build` script (esbuild) re-bundles `chatlytics-mcp.js` → `chatlytics-mcp.bundle.js`.
+The bundle is the file Claude Code actually runs; ship it on every release.
 
 ## Setup
 
@@ -51,7 +54,14 @@ them through to the MCP server stdio process.
 
 ## Verify install
 
-Run the bundled smoke test against your Chatlytics instance:
+Easiest path: in any Claude Code session, ask:
+
+> use `chatlytics_login` to test my connection
+
+You should get back `✅ Connected to ${URL}. Webhook registered. Sessions: N.`
+or a clear error explaining what to fix.
+
+Alternative — run the standalone smoke test from a checked-out repo:
 
 ```bash
 cd servers
@@ -63,9 +73,6 @@ npm test
 The test calls `GET ${CHATLYTICS_API_URL}/health` with your bearer token and
 asserts that `webhook_registered: true`. Exits 0 on success, 1 on failure
 with a clear error.
-
-You can also exercise it from inside Claude Code by asking it to use the
-`chatlytics_health` tool.
 
 ## Usage
 
