@@ -222,5 +222,32 @@ server.tool(
   }
 );
 
+// 7. Dispatch any Chatlytics channel action by name (CC-P9).
+// Chatlytics exposes ~100 WhatsApp actions (groups, polls, reactions, media,
+// status, presence, labels, etc). chatlytics_send/read/search cover the 6
+// most common operations; this tool covers everything else.
+server.tool(
+  "chatlytics_dispatch",
+  "Dispatch any Chatlytics channel action by name. Use chatlytics_actions to list the full catalog (~100 actions including createGroup, sendPoll, muteChat, addLabel, setProfilePicture, etc). Use chatlytics_send/read/search for the 6 common operations — this is for everything else.",
+  {
+    action: z.string().describe("Action name from the Chatlytics catalog (e.g. 'createGroup', 'sendPoll', 'muteChat')"),
+    target: z.string().optional().describe("Chat ID, JID, or contact/group name (action-dependent)"),
+    parameters: z.record(z.any()).optional().describe("Action-specific parameters object"),
+    session: z.string().optional().describe("Session ID (uses default if omitted)"),
+  },
+  async ({ action, target, parameters, session }) => {
+    try {
+      const body = { action };
+      if (target !== undefined) body.target = target;
+      if (parameters !== undefined) body.params = parameters;
+      if (session || DEFAULT_SESSION) body.session = session || DEFAULT_SESSION;
+      const result = await callApi("POST", "/api/v1/actions", body);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (e) {
+      return { isError: true, content: [{ type: "text", text: e.message }] };
+    }
+  }
+);
+
 const transport = new StdioServerTransport();
 await server.connect(transport);
