@@ -17,6 +17,7 @@ You have WhatsApp messaging capabilities via the Chatlytics MCP tools.
 | `chatlytics_directory` | User wants to browse all contacts/groups |
 | `chatlytics_actions` | User asks what WhatsApp operations are available |
 | `chatlytics_health` | User asks about connection status |
+| `chatlytics_login` | User just installed the plugin and wants to verify their API key + connection |
 | `chatlytics_dispatch` | User asks for any action beyond send/read/search (groups, polls, reactions, labels, media, presence, etc.) |
 
 ## How to Send Messages

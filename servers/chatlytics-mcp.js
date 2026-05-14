@@ -31,6 +31,18 @@ async function callApi(method, path, body) {
     data = text;
   }
   if (!res.ok) {
+    // CC-P8: distinct, actionable error for auth failures so the LLM can
+    // relay the fix path to the user instead of dumping a raw stack.
+    if (res.status === 401 || res.status === 403) {
+      const rawBody = typeof data === "string" ? data : JSON.stringify(data);
+      throw new Error(
+        `Chatlytics API rejected the key (HTTP ${res.status}). ` +
+          `Verify CHATLYTICS_API_KEY in your .claude/settings.json matches ` +
+          `the key from https://app.chatlytics.ai. ` +
+          `Run 'chatlytics_health' or 'chatlytics_login' to retest. ` +
+          `Raw response: ${rawBody.slice(0, 300)}`
+      );
+    }
     throw new Error(`HTTP ${res.status}: ${typeof data === "string" ? data : JSON.stringify(data)}`);
   }
   return data;
@@ -218,6 +230,75 @@ server.tool(
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     } catch (e) {
       return { isError: true, content: [{ type: "text", text: e.message }] };
+    }
+  }
+);
+
+// 8. Validate the API key + connection (CC-P8).
+// Runs once after install to verify setup. Returns a clear pass/fail summary
+// with troubleshooting hints so non-technical users can self-diagnose.
+server.tool(
+  "chatlytics_login",
+  "Validate the Chatlytics API key + connection. Run this once after install to verify setup. Returns a clear pass/fail with troubleshooting hints.",
+  {},
+  async () => {
+    if (!API_KEY) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text:
+              `❌ CHATLYTICS_API_KEY is not set. Add it to your .claude/settings.json ` +
+              `env block (or shell) and restart Claude Code. Get a key at ` +
+              `https://app.chatlytics.ai → Settings → API Keys.`,
+          },
+        ],
+      };
+    }
+    try {
+      const result = await callApi("GET", "/health");
+      const webhookOk = result?.webhook_registered === true;
+      const sessions = Array.isArray(result?.sessions)
+        ? result.sessions.length
+        : typeof result?.sessions === "number"
+          ? result.sessions
+          : "unknown";
+      if (!webhookOk) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text:
+                `⚠️  Connected to Chatlytics at ${API_URL}, but webhook_registered is not true ` +
+                `(got ${JSON.stringify(result?.webhook_registered)}). WhatsApp inbound may be down. ` +
+                `Contact support or check the Chatlytics admin panel.`,
+            },
+          ],
+        };
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              `✅ Connected to Chatlytics at ${API_URL}. ` +
+              `Webhook registered. Sessions: ${sessions}.`,
+          },
+        ],
+      };
+    } catch (e) {
+      // callApi already formats 401/403 with the friendly auth-error message.
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: `❌ ${e.message}`,
+          },
+        ],
+      };
     }
   }
 );
