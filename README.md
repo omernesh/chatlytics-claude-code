@@ -5,9 +5,12 @@ Give your Claude Code agent WhatsApp messaging superpowers via the
 
 The plugin ships:
 
-- **6 MCP tools** — `chatlytics_send`, `chatlytics_read`, `chatlytics_search`,
-  `chatlytics_directory`, `chatlytics_actions`, `chatlytics_health`.
+- **8 MCP tools** — `chatlytics_send`, `chatlytics_read`, `chatlytics_search`,
+  `chatlytics_directory`, `chatlytics_actions`, `chatlytics_health`,
+  `chatlytics_login`, `chatlytics_dispatch`.
 - **A skill** that teaches Claude Code when and how to use WhatsApp.
+
+> **New here? Read [QUICKSTART.md](./QUICKSTART.md) — first WhatsApp message from Claude Code in under 5 minutes.**
 
 ## Install
 
