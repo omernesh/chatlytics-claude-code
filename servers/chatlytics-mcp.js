@@ -192,12 +192,14 @@ server.tool(
   },
   async ({ type, search, limit }) => {
     try {
+      // CC-P10: clean URL build — single conditional path, no double-prepend.
       const params = new URLSearchParams();
       if (type) params.set("type", type);
       if (search) params.set("search", search);
       if (limit) params.set("limit", String(limit));
       const qs = params.toString();
-      const result = await callApi("GET", `/api/v1/directory${qs ? `?${qs}` : ""}`);
+      const path = qs ? `/api/v1/directory?${qs}` : "/api/v1/directory";
+      const result = await callApi("GET", path);
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     } catch (e) {
       return { isError: true, content: [{ type: "text", text: e.message }] };
