@@ -1,9 +1,15 @@
 {
   "name": "chatlytics",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "WhatsApp messaging for Claude Code via Chatlytics",
   "author": {
     "name": "Chatlytics",
     "url": "https://chatlytics.ai"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/omernesh/chatlytics-claude-code",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/omernesh/chatlytics-claude-code.git"
   }
 }
