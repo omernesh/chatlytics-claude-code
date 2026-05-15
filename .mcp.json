@@ -4,9 +4,9 @@
       "command": "node",
       "args": ["${CLAUDE_PLUGIN_ROOT}/servers/chatlytics-mcp.bundle.js"],
       "env": {
-        "CHATLYTICS_API_URL": "",
-        "CHATLYTICS_API_KEY": "",
-        "CHATLYTICS_SESSION": ""
+        "CHATLYTICS_API_URL": "${CHATLYTICS_API_URL}",
+        "CHATLYTICS_API_KEY": "${CHATLYTICS_API_KEY}",
+        "CHATLYTICS_SESSION": "${CHATLYTICS_SESSION}"
       }
     }
   }

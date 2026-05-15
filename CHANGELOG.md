@@ -6,6 +6,23 @@
 
 All notable changes to the Chatlytics Claude Code plugin are documented here.
 
+## 1.1.2 — 2026-05-15
+
+### Fixed (real-user E2E install testing — second pass)
+
+- **`.mcp.json` env block hardcoded empty strings**, which OVERRODE the user's
+  values from `~/.claude/settings.json`. Symptom: after configuring the 3
+  CHATLYTICS_* env vars and running `/reload-plugins`, `chatlytics_login`
+  still reported `❌ CHATLYTICS_API_KEY is not set`. Root cause: Claude Code
+  passes the `env` block from `.mcp.json` to the spawned MCP child process
+  verbatim. Empty-string values overwrite parent-process env vars at spawn.
+  Fix: switched to `${VAR}` interpolation so Claude Code substitutes the
+  user's settings.json values at server-spawn time.
+
+After upgrading to 1.1.2, users may need to fully restart Claude Code (not
+just `/reload-plugins`) so the MCP server child process re-spawns with the
+corrected env interpolation.
+
 ## 1.1.1 — 2026-05-14
 
 ### Fixed (E2E install-test findings)
