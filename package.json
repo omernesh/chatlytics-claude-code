@@ -1,14 +1,31 @@
 {
-  "name": "chatlytics-claude-code",
+  "name": "@chatlytics/claude-code",
   "version": "1.2.0",
-  "private": true,
+  "private": false,
   "description": "Chatlytics Claude Code plugin — MCP server + skill for WhatsApp via Chatlytics REST API",
   "license": "MIT",
+  "author": "Omer Nesher <omernesher@gmail.com>",
   "homepage": "https://github.com/omernesh/chatlytics-claude-code",
   "repository": {
     "type": "git",
-    "url": "https://github.com/omernesh/chatlytics-claude-code.git"
+    "url": "git+https://github.com/omernesh/chatlytics-claude-code.git"
   },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "servers/chatlytics-mcp.bundle.js",
+    "servers/chatlytics-mcp.js",
+    "servers/package.json",
+    "skills/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "QUICKSTART.md"
+  ],
   "scripts": {
     "postinstall": "npm --prefix servers install",
     "setup": "npm --prefix servers install",
