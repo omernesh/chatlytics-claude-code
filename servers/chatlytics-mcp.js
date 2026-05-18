@@ -48,7 +48,7 @@ async function callApi(method, path, body) {
   return data;
 }
 
-const server = new McpServer({ name: "chatlytics", version: "1.2.0" });
+const server = new McpServer({ name: "chatlytics", version: "1.2.1" });
 
 // Detect WhatsApp JID-shaped strings. WAHA uses 4 suffix families:
 //   <phone>@c.us           — 1:1 contacts

@@ -1,6 +1,6 @@
 {
   "name": "@chatlytics/claude-code",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": false,
   "description": "WhatsApp messaging superpowers for Claude Code — 8 MCP tools + a teaching skill, name-resolved sends, full directory access, via the Chatlytics REST API",
   "license": "MIT",

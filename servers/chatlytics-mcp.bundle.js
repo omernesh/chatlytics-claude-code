@@ -21045,7 +21045,7 @@ async function callApi(method, path, body) {
   }
   return data;
 }
-var server = new McpServer({ name: "chatlytics", version: "1.2.0" });
+var server = new McpServer({ name: "chatlytics", version: "1.2.1" });
 function looksLikeJid(s) {
   if (typeof s !== "string" || s.length === 0) return false;
   return /@(c\.us|g\.us|lid|newsletter)$/i.test(s);

@@ -6,6 +6,35 @@
 
 All notable changes to the Chatlytics Claude Code plugin are documented here.
 
+## [1.2.1] - 2026-05-18
+
+Cosmetic release — no functional changes, no API surface changes.
+`npm install @chatlytics/claude-code@1.2.0` and `@1.2.1` are behaviourally
+identical. The bump exists solely so the marketing-flair description and
+README tagline land on the npm registry page (npm bakes the description
+into the published artifact and refuses re-uploads of the same version).
+
+### Changed
+
+- **Package description** (`package.json`) sharpened to "WhatsApp
+  messaging superpowers for Claude Code — 8 MCP tools + a teaching skill,
+  name-resolved sends, full directory access, via the Chatlytics REST API"
+- **README opening** rewritten with a bold superlative tagline, shields.io
+  badges (npm version, Node compat, license), and "Why
+  chatlytics-claude-code?" section with bold-led bullets. Inspired by the
+  positioning style of the deprecated `waha-openclaw-channel` npm package.
+- **Example contact name** in README Usage section: `Omer` → `Joe`
+  (more international).
+- **Bundle metadata** — `servers/chatlytics-mcp.js` MCP server version
+  literal bumped to match the package version; bundle rebuilt.
+
+### Preserved (all from 1.2.0)
+
+- 8 MCP tools (unchanged)
+- `looksLikeJid` regex `/@(c\.us|g\.us|lid|newsletter)$/i` (unchanged)
+- `chatlytics_send` resolveChatId integration from 1.2.0 (unchanged)
+- 715 KB self-contained ESM bundle (rebuilt with new version literal)
+
 ## 1.2.0 — 2026-05-18
 
 ### Coordination
