@@ -122,9 +122,14 @@ server.tool(
   },
   async ({ to, text, session }) => {
     try {
+      // Drift fix (v1.2.0): mirror chatlytics_read by pre-resolving
+      // bare names/phones to a JID via the search action. JID inputs
+      // short-circuit inside resolveChatId(). Ambiguous names throw
+      // a picker error with candidate list — same UX as chatlytics_read.
+      const resolved = await resolveChatId(to);
       const result = await callApi("POST", "/api/v1/actions", {
         action: "send",
-        params: { chatId: to, text },
+        params: { chatId: resolved, text },
         session: session || DEFAULT_SESSION || undefined,
       });
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
