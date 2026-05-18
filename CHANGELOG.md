@@ -6,6 +6,61 @@
 
 All notable changes to the Chatlytics Claude Code plugin are documented here.
 
+## 1.2.0 — 2026-05-18
+
+### Coordination
+
+- Bundle aligned with **chatlytics-hermes 3.0.0** on PyPI
+  (https://pypi.org/project/chatlytics-hermes/3.0.0/), the first
+  public PyPI publish of the sibling Python Hermes plugin. The JS
+  bundle and the Python plugin now share the same JID-handling
+  contract end-to-end.
+
+### Fixed
+
+- **`chatlytics_send` was bypassing `resolveChatId()`** — a drift
+  bug carried over from `1.0.0`. The handler now mirrors
+  `chatlytics_read`: bare names and phone numbers are resolved
+  to a JID via the `search` action before the API call. Existing
+  JID-passing callers are unaffected (the resolver short-circuits
+  on JID input). Ambiguous names return the same actionable
+  picker error the `chatlytics_read` tool returns.
+
+### Verified
+
+- **`looksLikeJid()` regex** (`/@(c\.us|g\.us|lid|newsletter)$/i`)
+  confirmed identical to chatlytics-hermes 3.0.0's Phase 14
+  canonical JID rule (`_JID_PATTERN = r"^.+@(c\.us|g\.us|lid|newsletter)$"`
+  in `src/chatlytics_hermes/tools.py`). Phone numbers and display
+  names are rejected at JID-detection time in BOTH plugins, ensuring
+  uniform behavior across the Python Hermes plugin and the JS MCP
+  bundle. No code change — alignment was already in place since
+  `1.1.0`; this entry documents the cross-repo invariant for the
+  record.
+
+### Internal
+
+- Esbuild bundle regenerated (`servers/chatlytics-mcp.bundle.js`,
+  714.4 KB).
+- Version constants aligned across `package.json` (root),
+  `servers/package.json`, and the `McpServer` constructor literal
+  in `servers/chatlytics-mcp.js`. Drift between `1.1.0` in
+  `package.json` and `1.1.2` in the CHANGELOG (artifact of the
+  hotfix commits in `1.1.1` / `1.1.2` not bumping `package.json`)
+  is reconciled by jumping straight to `1.2.0` everywhere.
+- **8 tools registered** (no change from `1.1.x`):
+  `chatlytics_send`, `chatlytics_read`, `chatlytics_search`,
+  `chatlytics_actions`, `chatlytics_directory`,
+  `chatlytics_health`, `chatlytics_login`, `chatlytics_dispatch`.
+
+### Out of scope (Phase 21)
+
+- npm publish (`@chatlytics/claude-code` first-ever publish)
+- `"private": true` → `false` flip
+- Package rename to scoped `@chatlytics/claude-code`
+- `"files":` allowlist + `.npmignore`
+- `v1.2.0` git tag
+
 ## 1.1.2 — 2026-05-15
 
 ### Fixed (real-user E2E install testing — second pass)
