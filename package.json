@@ -2,7 +2,7 @@
   "name": "@chatlytics/claude-code",
   "version": "1.2.0",
   "private": false,
-  "description": "Chatlytics Claude Code plugin — MCP server + skill for WhatsApp via Chatlytics REST API",
+  "description": "WhatsApp messaging superpowers for Claude Code — 8 MCP tools + a teaching skill, name-resolved sends, full directory access, via the Chatlytics REST API",
   "license": "MIT",
   "author": "Omer Nesher <omernesher@gmail.com>",
   "homepage": "https://github.com/omernesh/chatlytics-claude-code",

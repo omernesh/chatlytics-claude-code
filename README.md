@@ -1,14 +1,38 @@
 # Chatlytics Plugin for Claude Code
 
-Give your Claude Code agent WhatsApp messaging superpowers via the
-[Chatlytics](https://chatlytics.ai) REST API.
+> **The fastest path from `claude plugin install` to your first WhatsApp message.**
+
+WhatsApp messaging superpowers for your Claude Code agent — send to anyone, read any chat, search the directory, dispatch arbitrary Chatlytics actions. Backed by the [Chatlytics](https://chatlytics.ai) REST API. **Zero setup beyond two env vars. Self-contained 715 KB bundle. No `npm install` required.**
+
+[![npm](https://img.shields.io/npm/v/@chatlytics/claude-code.svg)](https://www.npmjs.com/package/@chatlytics/claude-code) [![Node](https://img.shields.io/node/v/@chatlytics/claude-code.svg)](https://www.npmjs.com/package/@chatlytics/claude-code) [![License](https://img.shields.io/npm/l/@chatlytics/claude-code.svg)](LICENSE)
 
 The plugin ships:
 
 - **8 MCP tools** — `chatlytics_send`, `chatlytics_read`, `chatlytics_search`,
   `chatlytics_directory`, `chatlytics_actions`, `chatlytics_health`,
   `chatlytics_login`, `chatlytics_dispatch`.
-- **A skill** that teaches Claude Code when and how to use WhatsApp.
+- **A skill** that teaches Claude Code *when* and *how* to use WhatsApp —
+  disambiguation patterns, name resolution, error handling, dispatch
+  composition.
+
+## Why chatlytics-claude-code?
+
+- **Name-first, JID-second** — say "send hello to Omer" or "read the marketing
+  channel"; the plugin resolves names through the Chatlytics directory before
+  sending. Ambiguous names return a picker error with candidates so the agent
+  can prompt the user to disambiguate.
+- **Self-contained bundle** — single ~715 KB ESM file (esbuild). No
+  `npm install` for end users; the bundle ships every dependency inline.
+- **Strict JID validation** — matches the Python sibling's regex
+  (`/@(c\.us|g\.us|lid|newsletter)$/i`); ambiguous chat-id strings (bare
+  phone numbers, display names) never reach the gateway. Pair with
+  `chatlytics_search` for human-readable input.
+- **Dispatch escape hatch** — `chatlytics_dispatch` exposes any Chatlytics
+  REST action by name, so the plugin is never the bottleneck when a new
+  Chatlytics capability ships.
+- **Cross-stack parity** — same contract as the Python
+  [chatlytics-hermes](https://pypi.org/project/chatlytics-hermes/) plugin
+  (v3.0+). Build agents in either runtime; the surface stays consistent.
 
 > **New here? Read [QUICKSTART.md](./QUICKSTART.md) — first WhatsApp message from Claude Code in under 5 minutes.**
 
