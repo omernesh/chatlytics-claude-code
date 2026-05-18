@@ -17,7 +17,7 @@ The plugin ships:
 
 ## Why chatlytics-claude-code?
 
-- **Name-first, JID-second** — say "send hello to Omer" or "read the marketing
+- **Name-first, JID-second** — say "send hello to Joe" or "read the marketing
   channel"; the plugin resolves names through the Chatlytics directory before
   sending. Ambiguous names return a picker error with candidates so the agent
   can prompt the user to disambiguate.
@@ -102,7 +102,7 @@ with a clear error.
 
 Just ask Claude Code:
 
-- "Send a WhatsApp message to Omer saying hello"
+- "Send a WhatsApp message to Joe saying hello"
 - "Read my recent WhatsApp messages from the Team Chat group"
 - "Search for the marketing channel"
 - "Check if WhatsApp is connected"
