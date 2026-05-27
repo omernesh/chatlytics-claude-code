@@ -2,22 +2,35 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
+// v4.0 MCP-SCOPED-01 (Phase 334) — env-var resolution
+// BOT_TOKEN takes precedence; API_KEY is the legacy v3.37 fallback. AUTH_VALUE
+// is what callApi() emits in `Authorization: Bearer <value>` regardless of
+// which env var supplied it. AUTH_MODE is the LABEL emitted at boot for
+// observability — NEVER log the raw value (INV-02 token plaintext discipline).
 const API_URL = process.env.CHATLYTICS_API_URL || "http://localhost:8050";
+const BOT_TOKEN = process.env.CHATLYTICS_BOT_TOKEN || "";
 const API_KEY = process.env.CHATLYTICS_API_KEY || "";
 const DEFAULT_SESSION = process.env.CHATLYTICS_SESSION || "";
+const AUTH_VALUE = BOT_TOKEN || API_KEY;
+const AUTH_MODE = BOT_TOKEN ? "bot_token" : (API_KEY ? "api_key" : "none");
 
 // IN-01: Warn on missing env vars at startup
 if (!process.env.CHATLYTICS_API_URL) {
   console.error("[chatlytics-mcp] Warning: CHATLYTICS_API_URL not set — using default http://localhost:8050");
 }
-if (!process.env.CHATLYTICS_API_KEY) {
-  console.error("[chatlytics-mcp] Warning: CHATLYTICS_API_KEY not set — API calls will be unauthenticated");
+if (AUTH_MODE === "none") {
+  console.error("[chatlytics-mcp] Warning: neither CHATLYTICS_BOT_TOKEN nor CHATLYTICS_API_KEY set — API calls will be unauthenticated");
+} else {
+  // v4.0 MCP-SCOPED-01: log auth MODE, never the value. DO NOT CHANGE — INV-02.
+  console.error(`[chatlytics-mcp] Auth mode: ${AUTH_MODE}`);
 }
 
 async function callApi(method, path, body) {
   const url = `${API_URL}${path}`;
   const headers = { "Content-Type": "application/json" };
-  if (API_KEY) headers["Authorization"] = `Bearer ${API_KEY}`;
+  // v4.0 MCP-SCOPED-02: single Bearer header path; value sourced from BOT_TOKEN
+  // (preferred) or API_KEY (legacy fallback). NO new header types.
+  if (AUTH_VALUE) headers["Authorization"] = `Bearer ${AUTH_VALUE}`;
 
   const opts = { method, headers, signal: AbortSignal.timeout(30_000) };
   if (body) opts.body = JSON.stringify(body);
@@ -31,21 +44,58 @@ async function callApi(method, path, body) {
     data = text;
   }
   if (!res.ok) {
-    // CC-P8: distinct, actionable error for auth failures so the LLM can
-    // relay the fix path to the user instead of dumping a raw stack.
+    // CC-P8 + v4.0 MCP-SCOPED-01: distinct, actionable error for auth failures
+    // so the LLM can relay the fix path. References BOTH env-var names; do not
+    // interpolate token values into the message (INV-02).
     if (res.status === 401 || res.status === 403) {
       const rawBody = typeof data === "string" ? data : JSON.stringify(data);
       throw new Error(
-        `Chatlytics API rejected the key (HTTP ${res.status}). ` +
-          `Verify CHATLYTICS_API_KEY in your .claude/settings.json matches ` +
-          `the key from https://app.chatlytics.ai. ` +
-          `Run 'chatlytics_health' or 'chatlytics_login' to retest. ` +
+        `Chatlytics API rejected the credential (HTTP ${res.status}). ` +
+          `Verify CHATLYTICS_BOT_TOKEN (preferred, v4.0+) or CHATLYTICS_API_KEY ` +
+          `(legacy v3.37) in your .claude/settings.json matches the value from ` +
+          `https://app.chatlytics.ai. Run 'chatlytics_health' or 'chatlytics_login' to retest. ` +
           `Raw response: ${rawBody.slice(0, 300)}`
       );
     }
     throw new Error(`HTTP ${res.status}: ${typeof data === "string" ? data : JSON.stringify(data)}`);
   }
   return data;
+}
+
+// v4.0 MCP-SCOPED-03 (Phase 334) — fetch the bot's filtered tool catalog at
+// startup. Fail-OPEN policy: when bot-token mode is active but the endpoint
+// is unreachable, register ALL 8 tools. P327 checkBotScope at REST dispatch
+// (api-v1.ts) remains the security boundary, so a permissive catalog cannot
+// grant a bot extra capabilities. UX trade: operator visibility may temporarily
+// widen during a chatlytics outage. DO NOT switch to fail-CLOSED without
+// revisiting the security model (T-334-10 in 334-02 threat register).
+async function fetchAllowedTools() {
+  if (AUTH_MODE !== "bot_token") return null;
+  try {
+    const res = await fetch(`${API_URL}/api/v1/bot/me/tools`, {
+      headers: { Authorization: `Bearer ${BOT_TOKEN}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) {
+      console.error(`[chatlytics-mcp] /bot/me/tools returned ${res.status} — registering ALL tools (fail-open)`);
+      return null;
+    }
+    const data = await res.json();
+    if (!Array.isArray(data?.tools)) {
+      console.error(`[chatlytics-mcp] /bot/me/tools response missing tools[] — registering ALL tools (fail-open)`);
+      return null;
+    }
+    return new Set(data.tools.map(t => t.name));
+  } catch (e) {
+    console.error(`[chatlytics-mcp] /bot/me/tools fetch failed: ${e.message} — registering ALL tools (fail-open)`);
+    return null;
+  }
+}
+
+const allowed = await fetchAllowedTools();
+const allow = (name) => allowed === null || allowed.has(name);
+if (allowed !== null) {
+  console.error(`[chatlytics-mcp] Filtered tool catalog: ${allowed.size}/8 tools allowed (${[...allowed].join(", ")})`);
 }
 
 const server = new McpServer({ name: "chatlytics", version: "1.2.1" });
@@ -112,228 +162,253 @@ async function resolveChatId(input) {
 }
 
 // 1. Send a WhatsApp message
-server.tool(
-  "chatlytics_send",
-  "Send a WhatsApp message to a contact, group, or phone number",
-  {
-    to: z.string().describe("Contact name, phone number, or chat ID"),
-    text: z.string().describe("Message text to send"),
-    session: z.string().optional().describe("Session ID (uses default if omitted)"),
-  },
-  async ({ to, text, session }) => {
-    try {
-      // Drift fix (v1.2.0): mirror chatlytics_read by pre-resolving
-      // bare names/phones to a JID via the search action. JID inputs
-      // short-circuit inside resolveChatId(). Ambiguous names throw
-      // a picker error with candidate list — same UX as chatlytics_read.
-      const resolved = await resolveChatId(to);
-      const result = await callApi("POST", "/api/v1/actions", {
-        action: "send",
-        params: { chatId: resolved, text },
-        session: session || DEFAULT_SESSION || undefined,
-      });
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-    } catch (e) {
-      return { isError: true, content: [{ type: "text", text: e.message }] };
+if (allow("chatlytics_send")) {
+  server.tool(
+    "chatlytics_send",
+    "Send a WhatsApp message to a contact, group, or phone number",
+    {
+      to: z.string().describe("Contact name, phone number, or chat ID"),
+      text: z.string().describe("Message text to send"),
+      session: z.string().optional().describe("Session ID (uses default if omitted)"),
+    },
+    async ({ to, text, session }) => {
+      try {
+        // Drift fix (v1.2.0): mirror chatlytics_read by pre-resolving
+        // bare names/phones to a JID via the search action. JID inputs
+        // short-circuit inside resolveChatId(). Ambiguous names throw
+        // a picker error with candidate list — same UX as chatlytics_read.
+        const resolved = await resolveChatId(to);
+        const result = await callApi("POST", "/api/v1/actions", {
+          action: "send",
+          params: { chatId: resolved, text },
+          session: session || DEFAULT_SESSION || undefined,
+        });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      } catch (e) {
+        return { isError: true, content: [{ type: "text", text: e.message }] };
+      }
     }
-  }
-);
+  );
+}
 
 // 2. Read recent messages from a chat
-server.tool(
-  "chatlytics_read",
-  "Read recent messages from a WhatsApp chat. Accepts a JID (preferred) or a contact/group name (auto-resolved via search; ambiguous names return a picker error).",
-  {
-    chatId: z.string().describe("Chat JID (e.g. 972544329000@c.us, 12036...@g.us) or a contact/group name to auto-resolve"),
-    limit: z.number().optional().default(10).describe("Number of messages to fetch (default 10)"),
-  },
-  async ({ chatId, limit }) => {
-    try {
-      // CC-P6: resolve human names to JIDs before calling readMessages
-      // (which silently fails on non-JID input).
-      const resolved = await resolveChatId(chatId);
-      const result = await callApi("POST", "/api/v1/actions", {
-        action: "readMessages",
-        params: { chatId: resolved, limit },
-      });
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-    } catch (e) {
-      return { isError: true, content: [{ type: "text", text: e.message }] };
+if (allow("chatlytics_read")) {
+  server.tool(
+    "chatlytics_read",
+    "Read recent messages from a WhatsApp chat. Accepts a JID (preferred) or a contact/group name (auto-resolved via search; ambiguous names return a picker error).",
+    {
+      chatId: z.string().describe("Chat JID (e.g. 972544329000@c.us, 12036...@g.us) or a contact/group name to auto-resolve"),
+      limit: z.number().optional().default(10).describe("Number of messages to fetch (default 10)"),
+    },
+    async ({ chatId, limit }) => {
+      try {
+        // CC-P6: resolve human names to JIDs before calling readMessages
+        // (which silently fails on non-JID input).
+        const resolved = await resolveChatId(chatId);
+        const result = await callApi("POST", "/api/v1/actions", {
+          action: "readMessages",
+          params: { chatId: resolved, limit },
+        });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      } catch (e) {
+        return { isError: true, content: [{ type: "text", text: e.message }] };
+      }
     }
-  }
-);
+  );
+}
 
 // 3. Search contacts/groups by name
-server.tool(
-  "chatlytics_search",
-  "Search for WhatsApp contacts, groups, or channels by name",
-  {
-    query: z.string().describe("Search query (name, phone number, or keyword)"),
-  },
-  async ({ query }) => {
-    try {
-      const result = await callApi("POST", "/api/v1/actions", {
-        action: "search",
-        params: { query },
-      });
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-    } catch (e) {
-      return { isError: true, content: [{ type: "text", text: e.message }] };
+if (allow("chatlytics_search")) {
+  server.tool(
+    "chatlytics_search",
+    "Search for WhatsApp contacts, groups, or channels by name",
+    {
+      query: z.string().describe("Search query (name, phone number, or keyword)"),
+    },
+    async ({ query }) => {
+      try {
+        const result = await callApi("POST", "/api/v1/actions", {
+          action: "search",
+          params: { query },
+        });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      } catch (e) {
+        return { isError: true, content: [{ type: "text", text: e.message }] };
+      }
     }
-  }
-);
+  );
+}
 
 // 4. List all available WhatsApp actions
-server.tool(
-  "chatlytics_actions",
-  "List all available WhatsApp actions supported by Chatlytics",
-  {},
-  async () => {
-    try {
-      const result = await callApi("GET", "/api/v1/actions");
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-    } catch (e) {
-      return { isError: true, content: [{ type: "text", text: e.message }] };
+if (allow("chatlytics_actions")) {
+  server.tool(
+    "chatlytics_actions",
+    "List all available WhatsApp actions supported by Chatlytics",
+    {},
+    async () => {
+      try {
+        const result = await callApi("GET", "/api/v1/actions");
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      } catch (e) {
+        return { isError: true, content: [{ type: "text", text: e.message }] };
+      }
     }
-  }
-);
+  );
+}
 
 // 5. Browse contacts and groups directory
-server.tool(
-  "chatlytics_directory",
-  "Browse WhatsApp contacts, groups, and newsletters",
-  {
-    type: z.enum(["contact", "group", "newsletter"]).optional().describe("Filter by type"),
-    search: z.string().optional().describe("Search filter"),
-    limit: z.number().optional().describe("Max results to return"),
-  },
-  async ({ type, search, limit }) => {
-    try {
-      // CC-P10: clean URL build — single conditional path, no double-prepend.
-      const params = new URLSearchParams();
-      if (type) params.set("type", type);
-      if (search) params.set("search", search);
-      if (limit) params.set("limit", String(limit));
-      const qs = params.toString();
-      const path = qs ? `/api/v1/directory?${qs}` : "/api/v1/directory";
-      const result = await callApi("GET", path);
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-    } catch (e) {
-      return { isError: true, content: [{ type: "text", text: e.message }] };
+if (allow("chatlytics_directory")) {
+  server.tool(
+    "chatlytics_directory",
+    "Browse WhatsApp contacts, groups, and newsletters",
+    {
+      type: z.enum(["contact", "group", "newsletter"]).optional().describe("Filter by type"),
+      search: z.string().optional().describe("Search filter"),
+      limit: z.number().optional().describe("Max results to return"),
+    },
+    async ({ type, search, limit }) => {
+      try {
+        // CC-P10: clean URL build — single conditional path, no double-prepend.
+        const params = new URLSearchParams();
+        if (type) params.set("type", type);
+        if (search) params.set("search", search);
+        if (limit) params.set("limit", String(limit));
+        const qs = params.toString();
+        const path = qs ? `/api/v1/directory?${qs}` : "/api/v1/directory";
+        const result = await callApi("GET", path);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      } catch (e) {
+        return { isError: true, content: [{ type: "text", text: e.message }] };
+      }
     }
-  }
-);
+  );
+}
 
 // 6. Check Chatlytics connection health
-server.tool(
-  "chatlytics_health",
-  "Check Chatlytics and WhatsApp connection status",
-  {},
-  async () => {
-    try {
-      const result = await callApi("GET", "/health");
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-    } catch (e) {
-      return { isError: true, content: [{ type: "text", text: e.message }] };
+if (allow("chatlytics_health")) {
+  server.tool(
+    "chatlytics_health",
+    "Check Chatlytics and WhatsApp connection status",
+    {},
+    async () => {
+      try {
+        const result = await callApi("GET", "/health");
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      } catch (e) {
+        return { isError: true, content: [{ type: "text", text: e.message }] };
+      }
     }
-  }
-);
+  );
+}
 
 // 8. Validate the API key + connection (CC-P8).
 // Runs once after install to verify setup. Returns a clear pass/fail summary
 // with troubleshooting hints so non-technical users can self-diagnose.
-server.tool(
-  "chatlytics_login",
-  "Validate the Chatlytics API key + connection. Run this once after install to verify setup. Returns a clear pass/fail with troubleshooting hints.",
-  {},
-  async () => {
-    if (!API_KEY) {
-      return {
-        isError: true,
-        content: [
-          {
-            type: "text",
-            text:
-              `❌ CHATLYTICS_API_KEY is not set. Add it to your .claude/settings.json ` +
-              `env block (or shell) and restart Claude Code. Get a key at ` +
-              `https://app.chatlytics.ai → Settings → API Keys.`,
-          },
-        ],
-      };
-    }
-    try {
-      const result = await callApi("GET", "/health");
-      const webhookOk = result?.webhook_registered === true;
-      const sessions = Array.isArray(result?.sessions)
-        ? result.sessions.length
-        : typeof result?.sessions === "number"
-          ? result.sessions
-          : "unknown";
-      if (!webhookOk) {
+//
+// v4.0 MCP-SCOPED-03 carve-out: chatlytics_login is in ALWAYS_ALLOW_TOOLS
+// server-side (src/bot-tool-filter.ts). The allow() check here is defensive
+// — when bot-token mode is active, the server's /bot/me/tools response ALWAYS
+// includes chatlytics_login so allow() returns true. When legacy api_key mode
+// or fail-open is active, allowed===null so allow() also returns true.
+// Therefore this tool is effectively unconditionally registered. The wrap
+// is kept for symmetry + future-proofing.
+if (allow("chatlytics_login")) {
+  server.tool(
+    "chatlytics_login",
+    "Validate the Chatlytics API key + connection. Run this once after install to verify setup. Returns a clear pass/fail with troubleshooting hints.",
+    {},
+    async () => {
+      if (!AUTH_VALUE) {
         return {
           isError: true,
           content: [
             {
               type: "text",
               text:
-                `⚠️  Connected to Chatlytics at ${API_URL}, but webhook_registered is not true ` +
-                `(got ${JSON.stringify(result?.webhook_registered)}). WhatsApp inbound may be down. ` +
-                `Contact support or check the Chatlytics admin panel.`,
+                `❌ Neither CHATLYTICS_BOT_TOKEN (preferred, v4.0+) nor CHATLYTICS_API_KEY ` +
+                `(legacy v3.37) is set. Add one to your .claude/settings.json env block ` +
+                `(or shell) and restart Claude Code. Get a key at ` +
+                `https://app.chatlytics.ai → Settings → API Keys.`,
             },
           ],
         };
       }
-      return {
-        content: [
-          {
-            type: "text",
-            text:
-              `✅ Connected to Chatlytics at ${API_URL}. ` +
-              `Webhook registered. Sessions: ${sessions}.`,
-          },
-        ],
-      };
-    } catch (e) {
-      // callApi already formats 401/403 with the friendly auth-error message.
-      return {
-        isError: true,
-        content: [
-          {
-            type: "text",
-            text: `❌ ${e.message}`,
-          },
-        ],
-      };
+      try {
+        const result = await callApi("GET", "/health");
+        const webhookOk = result?.webhook_registered === true;
+        const sessions = Array.isArray(result?.sessions)
+          ? result.sessions.length
+          : typeof result?.sessions === "number"
+            ? result.sessions
+            : "unknown";
+        if (!webhookOk) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text:
+                  `⚠️  Connected to Chatlytics at ${API_URL}, but webhook_registered is not true ` +
+                  `(got ${JSON.stringify(result?.webhook_registered)}). WhatsApp inbound may be down. ` +
+                  `Contact support or check the Chatlytics admin panel.`,
+              },
+            ],
+          };
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `✅ Connected to Chatlytics at ${API_URL} (auth mode: ${AUTH_MODE}). ` +
+                `Webhook registered. Sessions: ${sessions}.`,
+            },
+          ],
+        };
+      } catch (e) {
+        // callApi already formats 401/403 with the friendly auth-error message.
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `❌ ${e.message}`,
+            },
+          ],
+        };
+      }
     }
-  }
-);
+  );
+}
 
 // 7. Dispatch any Chatlytics channel action by name (CC-P9).
 // Chatlytics exposes ~100 WhatsApp actions (groups, polls, reactions, media,
 // status, presence, labels, etc). chatlytics_send/read/search cover the 6
 // most common operations; this tool covers everything else.
-server.tool(
-  "chatlytics_dispatch",
-  "Dispatch any Chatlytics channel action by name. Use chatlytics_actions to list the full catalog (~100 actions including createGroup, sendPoll, muteChat, addLabel, setProfilePicture, etc). Use chatlytics_send/read/search for the 6 common operations — this is for everything else.",
-  {
-    action: z.string().describe("Action name from the Chatlytics catalog (e.g. 'createGroup', 'sendPoll', 'muteChat')"),
-    target: z.string().optional().describe("Chat ID, JID, or contact/group name (action-dependent)"),
-    parameters: z.record(z.any()).optional().describe("Action-specific parameters object"),
-    session: z.string().optional().describe("Session ID (uses default if omitted)"),
-  },
-  async ({ action, target, parameters, session }) => {
-    try {
-      const body = { action };
-      if (target !== undefined) body.target = target;
-      if (parameters !== undefined) body.params = parameters;
-      if (session || DEFAULT_SESSION) body.session = session || DEFAULT_SESSION;
-      const result = await callApi("POST", "/api/v1/actions", body);
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-    } catch (e) {
-      return { isError: true, content: [{ type: "text", text: e.message }] };
+if (allow("chatlytics_dispatch")) {
+  server.tool(
+    "chatlytics_dispatch",
+    "Dispatch any Chatlytics channel action by name. Use chatlytics_actions to list the full catalog (~100 actions including createGroup, sendPoll, muteChat, addLabel, setProfilePicture, etc). Use chatlytics_send/read/search for the 6 common operations — this is for everything else.",
+    {
+      action: z.string().describe("Action name from the Chatlytics catalog (e.g. 'createGroup', 'sendPoll', 'muteChat')"),
+      target: z.string().optional().describe("Chat ID, JID, or contact/group name (action-dependent)"),
+      parameters: z.record(z.any()).optional().describe("Action-specific parameters object"),
+      session: z.string().optional().describe("Session ID (uses default if omitted)"),
+    },
+    async ({ action, target, parameters, session }) => {
+      try {
+        const body = { action };
+        if (target !== undefined) body.target = target;
+        if (parameters !== undefined) body.params = parameters;
+        if (session || DEFAULT_SESSION) body.session = session || DEFAULT_SESSION;
+        const result = await callApi("POST", "/api/v1/actions", body);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      } catch (e) {
+        return { isError: true, content: [{ type: "text", text: e.message }] };
+      }
     }
-  }
-);
+  );
+}
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
