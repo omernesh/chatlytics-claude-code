@@ -21012,18 +21012,23 @@ var StdioServerTransport = class {
 
 // chatlytics-mcp.js
 var API_URL = process.env.CHATLYTICS_API_URL || "http://localhost:8050";
+var BOT_TOKEN = process.env.CHATLYTICS_BOT_TOKEN || "";
 var API_KEY = process.env.CHATLYTICS_API_KEY || "";
 var DEFAULT_SESSION = process.env.CHATLYTICS_SESSION || "";
+var AUTH_VALUE = BOT_TOKEN || API_KEY;
+var AUTH_MODE = BOT_TOKEN ? "bot_token" : API_KEY ? "api_key" : "none";
 if (!process.env.CHATLYTICS_API_URL) {
   console.error("[chatlytics-mcp] Warning: CHATLYTICS_API_URL not set \u2014 using default http://localhost:8050");
 }
-if (!process.env.CHATLYTICS_API_KEY) {
-  console.error("[chatlytics-mcp] Warning: CHATLYTICS_API_KEY not set \u2014 API calls will be unauthenticated");
+if (AUTH_MODE === "none") {
+  console.error("[chatlytics-mcp] Warning: neither CHATLYTICS_BOT_TOKEN nor CHATLYTICS_API_KEY set \u2014 API calls will be unauthenticated");
+} else {
+  console.error(`[chatlytics-mcp] Auth mode: ${AUTH_MODE}`);
 }
 async function callApi(method, path, body) {
   const url = `${API_URL}${path}`;
   const headers = { "Content-Type": "application/json" };
-  if (API_KEY) headers["Authorization"] = `Bearer ${API_KEY}`;
+  if (AUTH_VALUE) headers["Authorization"] = `Bearer ${AUTH_VALUE}`;
   const opts = { method, headers, signal: AbortSignal.timeout(3e4) };
   if (body) opts.body = JSON.stringify(body);
   const res = await fetch(url, opts);
@@ -21038,14 +21043,41 @@ async function callApi(method, path, body) {
     if (res.status === 401 || res.status === 403) {
       const rawBody = typeof data === "string" ? data : JSON.stringify(data);
       throw new Error(
-        `Chatlytics API rejected the key (HTTP ${res.status}). Verify CHATLYTICS_API_KEY in your .claude/settings.json matches the key from https://app.chatlytics.ai. Run 'chatlytics_health' or 'chatlytics_login' to retest. Raw response: ${rawBody.slice(0, 300)}`
+        `Chatlytics API rejected the credential (HTTP ${res.status}). Verify CHATLYTICS_BOT_TOKEN (preferred, v4.0+) or CHATLYTICS_API_KEY (legacy v3.37) in your .claude/settings.json matches the value from https://app.chatlytics.ai. Run 'chatlytics_health' or 'chatlytics_login' to retest. Raw response: ${rawBody.slice(0, 300)}`
       );
     }
     throw new Error(`HTTP ${res.status}: ${typeof data === "string" ? data : JSON.stringify(data)}`);
   }
   return data;
 }
-var server = new McpServer({ name: "chatlytics", version: "1.2.1" });
+async function fetchAllowedTools() {
+  if (AUTH_MODE !== "bot_token") return null;
+  try {
+    const res = await fetch(`${API_URL}/api/v1/bot/me/tools`, {
+      headers: { Authorization: `Bearer ${BOT_TOKEN}` },
+      signal: AbortSignal.timeout(1e4)
+    });
+    if (!res.ok) {
+      console.error(`[chatlytics-mcp] /bot/me/tools returned ${res.status} \u2014 registering ALL tools (fail-open)`);
+      return null;
+    }
+    const data = await res.json();
+    if (!Array.isArray(data?.tools)) {
+      console.error(`[chatlytics-mcp] /bot/me/tools response missing tools[] \u2014 registering ALL tools (fail-open)`);
+      return null;
+    }
+    return new Set(data.tools.map((t) => t.name));
+  } catch (e) {
+    console.error(`[chatlytics-mcp] /bot/me/tools fetch failed: ${e.message} \u2014 registering ALL tools (fail-open)`);
+    return null;
+  }
+}
+var allowed = await fetchAllowedTools();
+var allow = (name) => allowed === null || allowed.has(name);
+if (allowed !== null) {
+  console.error(`[chatlytics-mcp] Filtered tool catalog: ${allowed.size}/8 tools allowed (${[...allowed].join(", ")})`);
+}
+var server = new McpServer({ name: "chatlytics", version: "1.2.0" });
 function looksLikeJid(s) {
   if (typeof s !== "string" || s.length === 0) return false;
   return /@(c\.us|g\.us|lid|newsletter)$/i.test(s);
@@ -21088,188 +21120,203 @@ ${list}`
   }
   return candidates[0].jid;
 }
-server.tool(
-  "chatlytics_send",
-  "Send a WhatsApp message to a contact, group, or phone number",
-  {
-    to: external_exports.string().describe("Contact name, phone number, or chat ID"),
-    text: external_exports.string().describe("Message text to send"),
-    session: external_exports.string().optional().describe("Session ID (uses default if omitted)")
-  },
-  async ({ to, text, session }) => {
-    try {
-      const resolved = await resolveChatId(to);
-      const result = await callApi("POST", "/api/v1/actions", {
-        action: "send",
-        params: { chatId: resolved, text },
-        session: session || DEFAULT_SESSION || void 0
-      });
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-    } catch (e) {
-      return { isError: true, content: [{ type: "text", text: e.message }] };
+if (allow("chatlytics_send")) {
+  server.tool(
+    "chatlytics_send",
+    "Send a WhatsApp message to a contact, group, or phone number",
+    {
+      to: external_exports.string().describe("Contact name, phone number, or chat ID"),
+      text: external_exports.string().describe("Message text to send"),
+      session: external_exports.string().optional().describe("Session ID (uses default if omitted)")
+    },
+    async ({ to, text, session }) => {
+      try {
+        const result = await callApi("POST", "/api/v1/actions", {
+          action: "send",
+          params: { chatId: to, text },
+          session: session || DEFAULT_SESSION || void 0
+        });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      } catch (e) {
+        return { isError: true, content: [{ type: "text", text: e.message }] };
+      }
     }
-  }
-);
-server.tool(
-  "chatlytics_read",
-  "Read recent messages from a WhatsApp chat. Accepts a JID (preferred) or a contact/group name (auto-resolved via search; ambiguous names return a picker error).",
-  {
-    chatId: external_exports.string().describe("Chat JID (e.g. 972544329000@c.us, 12036...@g.us) or a contact/group name to auto-resolve"),
-    limit: external_exports.number().optional().default(10).describe("Number of messages to fetch (default 10)")
-  },
-  async ({ chatId, limit }) => {
-    try {
-      const resolved = await resolveChatId(chatId);
-      const result = await callApi("POST", "/api/v1/actions", {
-        action: "readMessages",
-        params: { chatId: resolved, limit }
-      });
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-    } catch (e) {
-      return { isError: true, content: [{ type: "text", text: e.message }] };
+  );
+}
+if (allow("chatlytics_read")) {
+  server.tool(
+    "chatlytics_read",
+    "Read recent messages from a WhatsApp chat. Accepts a JID (preferred) or a contact/group name (auto-resolved via search; ambiguous names return a picker error).",
+    {
+      chatId: external_exports.string().describe("Chat JID (e.g. 972544329000@c.us, 12036...@g.us) or a contact/group name to auto-resolve"),
+      limit: external_exports.number().optional().default(10).describe("Number of messages to fetch (default 10)")
+    },
+    async ({ chatId, limit }) => {
+      try {
+        const resolved = await resolveChatId(chatId);
+        const result = await callApi("POST", "/api/v1/actions", {
+          action: "readMessages",
+          params: { chatId: resolved, limit }
+        });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      } catch (e) {
+        return { isError: true, content: [{ type: "text", text: e.message }] };
+      }
     }
-  }
-);
-server.tool(
-  "chatlytics_search",
-  "Search for WhatsApp contacts, groups, or channels by name",
-  {
-    query: external_exports.string().describe("Search query (name, phone number, or keyword)")
-  },
-  async ({ query }) => {
-    try {
-      const result = await callApi("POST", "/api/v1/actions", {
-        action: "search",
-        params: { query }
-      });
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-    } catch (e) {
-      return { isError: true, content: [{ type: "text", text: e.message }] };
+  );
+}
+if (allow("chatlytics_search")) {
+  server.tool(
+    "chatlytics_search",
+    "Search for WhatsApp contacts, groups, or channels by name",
+    {
+      query: external_exports.string().describe("Search query (name, phone number, or keyword)")
+    },
+    async ({ query }) => {
+      try {
+        const result = await callApi("POST", "/api/v1/actions", {
+          action: "search",
+          params: { query }
+        });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      } catch (e) {
+        return { isError: true, content: [{ type: "text", text: e.message }] };
+      }
     }
-  }
-);
-server.tool(
-  "chatlytics_actions",
-  "List all available WhatsApp actions supported by Chatlytics",
-  {},
-  async () => {
-    try {
-      const result = await callApi("GET", "/api/v1/actions");
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-    } catch (e) {
-      return { isError: true, content: [{ type: "text", text: e.message }] };
+  );
+}
+if (allow("chatlytics_actions")) {
+  server.tool(
+    "chatlytics_actions",
+    "List all available WhatsApp actions supported by Chatlytics",
+    {},
+    async () => {
+      try {
+        const result = await callApi("GET", "/api/v1/actions");
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      } catch (e) {
+        return { isError: true, content: [{ type: "text", text: e.message }] };
+      }
     }
-  }
-);
-server.tool(
-  "chatlytics_directory",
-  "Browse WhatsApp contacts, groups, and newsletters",
-  {
-    type: external_exports.enum(["contact", "group", "newsletter"]).optional().describe("Filter by type"),
-    search: external_exports.string().optional().describe("Search filter"),
-    limit: external_exports.number().optional().describe("Max results to return")
-  },
-  async ({ type, search, limit }) => {
-    try {
-      const params = new URLSearchParams();
-      if (type) params.set("type", type);
-      if (search) params.set("search", search);
-      if (limit) params.set("limit", String(limit));
-      const qs = params.toString();
-      const path = qs ? `/api/v1/directory?${qs}` : "/api/v1/directory";
-      const result = await callApi("GET", path);
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-    } catch (e) {
-      return { isError: true, content: [{ type: "text", text: e.message }] };
+  );
+}
+if (allow("chatlytics_directory")) {
+  server.tool(
+    "chatlytics_directory",
+    "Browse WhatsApp contacts, groups, and newsletters",
+    {
+      type: external_exports.enum(["contact", "group", "newsletter"]).optional().describe("Filter by type"),
+      search: external_exports.string().optional().describe("Search filter"),
+      limit: external_exports.number().optional().describe("Max results to return")
+    },
+    async ({ type, search, limit }) => {
+      try {
+        const params = new URLSearchParams();
+        if (type) params.set("type", type);
+        if (search) params.set("search", search);
+        if (limit) params.set("limit", String(limit));
+        const qs = params.toString();
+        const path = qs ? `/api/v1/directory?${qs}` : "/api/v1/directory";
+        const result = await callApi("GET", path);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      } catch (e) {
+        return { isError: true, content: [{ type: "text", text: e.message }] };
+      }
     }
-  }
-);
-server.tool(
-  "chatlytics_health",
-  "Check Chatlytics and WhatsApp connection status",
-  {},
-  async () => {
-    try {
-      const result = await callApi("GET", "/health");
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-    } catch (e) {
-      return { isError: true, content: [{ type: "text", text: e.message }] };
+  );
+}
+if (allow("chatlytics_health")) {
+  server.tool(
+    "chatlytics_health",
+    "Check Chatlytics and WhatsApp connection status",
+    {},
+    async () => {
+      try {
+        const result = await callApi("GET", "/health");
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      } catch (e) {
+        return { isError: true, content: [{ type: "text", text: e.message }] };
+      }
     }
-  }
-);
-server.tool(
-  "chatlytics_login",
-  "Validate the Chatlytics API key + connection. Run this once after install to verify setup. Returns a clear pass/fail with troubleshooting hints.",
-  {},
-  async () => {
-    if (!API_KEY) {
-      return {
-        isError: true,
-        content: [
-          {
-            type: "text",
-            text: `\u274C CHATLYTICS_API_KEY is not set. Add it to your .claude/settings.json env block (or shell) and restart Claude Code. Get a key at https://app.chatlytics.ai \u2192 Settings \u2192 API Keys.`
-          }
-        ]
-      };
-    }
-    try {
-      const result = await callApi("GET", "/health");
-      const webhookOk = result?.webhook_registered === true;
-      const sessions = Array.isArray(result?.sessions) ? result.sessions.length : typeof result?.sessions === "number" ? result.sessions : "unknown";
-      if (!webhookOk) {
+  );
+}
+if (allow("chatlytics_login")) {
+  server.tool(
+    "chatlytics_login",
+    "Validate the Chatlytics API key + connection. Run this once after install to verify setup. Returns a clear pass/fail with troubleshooting hints.",
+    {},
+    async () => {
+      if (!AUTH_VALUE) {
         return {
           isError: true,
           content: [
             {
               type: "text",
-              text: `\u26A0\uFE0F  Connected to Chatlytics at ${API_URL}, but webhook_registered is not true (got ${JSON.stringify(result?.webhook_registered)}). WhatsApp inbound may be down. Contact support or check the Chatlytics admin panel.`
+              text: `\u274C Neither CHATLYTICS_BOT_TOKEN (preferred, v4.0+) nor CHATLYTICS_API_KEY (legacy v3.37) is set. Add one to your .claude/settings.json env block (or shell) and restart Claude Code. Get a key at https://app.chatlytics.ai \u2192 Settings \u2192 API Keys.`
             }
           ]
         };
       }
-      return {
-        content: [
-          {
-            type: "text",
-            text: `\u2705 Connected to Chatlytics at ${API_URL}. Webhook registered. Sessions: ${sessions}.`
-          }
-        ]
-      };
-    } catch (e) {
-      return {
-        isError: true,
-        content: [
-          {
-            type: "text",
-            text: `\u274C ${e.message}`
-          }
-        ]
-      };
+      try {
+        const result = await callApi("GET", "/health");
+        const webhookOk = result?.webhook_registered === true;
+        const sessions = Array.isArray(result?.sessions) ? result.sessions.length : typeof result?.sessions === "number" ? result.sessions : "unknown";
+        if (!webhookOk) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: `\u26A0\uFE0F  Connected to Chatlytics at ${API_URL}, but webhook_registered is not true (got ${JSON.stringify(result?.webhook_registered)}). WhatsApp inbound may be down. Contact support or check the Chatlytics admin panel.`
+              }
+            ]
+          };
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text: `\u2705 Connected to Chatlytics at ${API_URL} (auth mode: ${AUTH_MODE}). Webhook registered. Sessions: ${sessions}.`
+            }
+          ]
+        };
+      } catch (e) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `\u274C ${e.message}`
+            }
+          ]
+        };
+      }
     }
-  }
-);
-server.tool(
-  "chatlytics_dispatch",
-  "Dispatch any Chatlytics channel action by name. Use chatlytics_actions to list the full catalog (~100 actions including createGroup, sendPoll, muteChat, addLabel, setProfilePicture, etc). Use chatlytics_send/read/search for the 6 common operations \u2014 this is for everything else.",
-  {
-    action: external_exports.string().describe("Action name from the Chatlytics catalog (e.g. 'createGroup', 'sendPoll', 'muteChat')"),
-    target: external_exports.string().optional().describe("Chat ID, JID, or contact/group name (action-dependent)"),
-    parameters: external_exports.record(external_exports.any()).optional().describe("Action-specific parameters object"),
-    session: external_exports.string().optional().describe("Session ID (uses default if omitted)")
-  },
-  async ({ action, target, parameters, session }) => {
-    try {
-      const body = { action };
-      if (target !== void 0) body.target = target;
-      if (parameters !== void 0) body.params = parameters;
-      if (session || DEFAULT_SESSION) body.session = session || DEFAULT_SESSION;
-      const result = await callApi("POST", "/api/v1/actions", body);
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-    } catch (e) {
-      return { isError: true, content: [{ type: "text", text: e.message }] };
+  );
+}
+if (allow("chatlytics_dispatch")) {
+  server.tool(
+    "chatlytics_dispatch",
+    "Dispatch any Chatlytics channel action by name. Use chatlytics_actions to list the full catalog (~100 actions including createGroup, sendPoll, muteChat, addLabel, setProfilePicture, etc). Use chatlytics_send/read/search for the 6 common operations \u2014 this is for everything else.",
+    {
+      action: external_exports.string().describe("Action name from the Chatlytics catalog (e.g. 'createGroup', 'sendPoll', 'muteChat')"),
+      target: external_exports.string().optional().describe("Chat ID, JID, or contact/group name (action-dependent)"),
+      parameters: external_exports.record(external_exports.any()).optional().describe("Action-specific parameters object"),
+      session: external_exports.string().optional().describe("Session ID (uses default if omitted)")
+    },
+    async ({ action, target, parameters, session }) => {
+      try {
+        const body = { action };
+        if (target !== void 0) body.target = target;
+        if (parameters !== void 0) body.params = parameters;
+        if (session || DEFAULT_SESSION) body.session = session || DEFAULT_SESSION;
+        const result = await callApi("POST", "/api/v1/actions", body);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      } catch (e) {
+        return { isError: true, content: [{ type: "text", text: e.message }] };
+      }
     }
-  }
-);
+  );
+}
 var transport = new StdioServerTransport();
 await server.connect(transport);
