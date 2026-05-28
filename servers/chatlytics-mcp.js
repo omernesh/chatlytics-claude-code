@@ -134,13 +134,16 @@ async function fetchBotIdentity() {
 }
 
 const botIdentity = await fetchBotIdentity();
-if (botIdentity && botIdentity.display_name) {
+if (botIdentity) {
   // INV-02: fingerprint comes from the server, derived from SHA256(bot_token).
   // Never interpolate BOT_TOKEN into a log line — only the fp the server
   // sent us. The contract test in test/smoke.js (assertBotIdentityLog)
   // regression-checks that the raw token does not appear in stderr.
+  // P337 REVIEW MED-01 fix: defensive fallbacks for both fields so a
+  // server-side payload regression never produces a silent boot.
+  const name = botIdentity.display_name || "(unnamed bot)";
   const fp = botIdentity.bot_token_fp || "unknown";
-  console.error(`[chatlytics-mcp] Bot identity: ${botIdentity.display_name} (fp=${fp})`);
+  console.error(`[chatlytics-mcp] Bot identity: ${name} (fp=${fp})`);
 }
 
 // v4.0 CC-V2-02 (Phase 337) — long-poll inbound knobs. Clamped client-side
@@ -486,7 +489,7 @@ if (allow("chatlytics_poll")) {
     {
       cursor: z.string().optional().describe("Opaque cursor from a previous response. Omit on first call."),
       timeout_ms: z.number().optional().describe(`Max ms to block waiting for new envelopes. Default ${DEFAULT_LONGPOLL_TIMEOUT_MS}, clamped [${MIN_LONGPOLL_TIMEOUT_MS}, ${MAX_LONGPOLL_TIMEOUT_MS}].`),
-      ack: z.string().optional().describe("Cursor of the latest envelope you've handled. If set, POSTs /bot/updates/ack BEFORE the GET. Best-effort — ack failures log but do not block."),
+      ack: z.string().optional().describe("Cursor of the latest envelope you've handled. If set, POSTs /bot/updates/ack BEFORE the GET. Best-effort — ack failures log but do not block. NOTE: pass the SAME value as `cursor` in the same call to ack-and-resume; passing `ack` without `cursor` will ack then re-poll from seq 0."),
     },
     async ({ cursor, timeout_ms, ack }) => {
       if (AUTH_MODE !== "bot_token") {

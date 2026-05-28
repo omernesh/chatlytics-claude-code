@@ -21102,9 +21102,10 @@ async function fetchBotIdentity() {
   }
 }
 var botIdentity = await fetchBotIdentity();
-if (botIdentity && botIdentity.display_name) {
+if (botIdentity) {
+  const name = botIdentity.display_name || "(unnamed bot)";
   const fp = botIdentity.bot_token_fp || "unknown";
-  console.error(`[chatlytics-mcp] Bot identity: ${botIdentity.display_name} (fp=${fp})`);
+  console.error(`[chatlytics-mcp] Bot identity: ${name} (fp=${fp})`);
 }
 var DEFAULT_LONGPOLL_TIMEOUT_MS = 25e3;
 var MAX_LONGPOLL_TIMEOUT_MS = 6e4;
@@ -21361,7 +21362,7 @@ if (allow("chatlytics_poll")) {
     {
       cursor: external_exports.string().optional().describe("Opaque cursor from a previous response. Omit on first call."),
       timeout_ms: external_exports.number().optional().describe(`Max ms to block waiting for new envelopes. Default ${DEFAULT_LONGPOLL_TIMEOUT_MS}, clamped [${MIN_LONGPOLL_TIMEOUT_MS}, ${MAX_LONGPOLL_TIMEOUT_MS}].`),
-      ack: external_exports.string().optional().describe("Cursor of the latest envelope you've handled. If set, POSTs /bot/updates/ack BEFORE the GET. Best-effort \u2014 ack failures log but do not block.")
+      ack: external_exports.string().optional().describe("Cursor of the latest envelope you've handled. If set, POSTs /bot/updates/ack BEFORE the GET. Best-effort \u2014 ack failures log but do not block. NOTE: pass the SAME value as `cursor` in the same call to ack-and-resume; passing `ack` without `cursor` will ack then re-poll from seq 0.")
     },
     async ({ cursor, timeout_ms, ack }) => {
       if (AUTH_MODE !== "bot_token") {
