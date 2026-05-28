@@ -9,8 +9,8 @@
     {
       "name": "chatlytics",
       "source": "./",
-      "description": "WhatsApp messaging for Claude Code via Chatlytics — 8 MCP tools (send, read, search, dispatch, login, actions, directory, health) + a skill that triggers on WhatsApp asks. Beta-ready.",
-      "version": "1.1.2",
+      "description": "WhatsApp messaging for Claude Code via Chatlytics — 9 MCP tools (send, read, search, dispatch, login, actions, directory, health, poll) + a skill. v2.0 adds Telegram-style bot-token onboarding + long-poll inbound.",
+      "version": "2.0.0",
       "author": {
         "name": "Chatlytics",
         "url": "https://chatlytics.ai"

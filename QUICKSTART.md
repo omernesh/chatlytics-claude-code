@@ -23,16 +23,35 @@ You need:
 
 ---
 
-## 2. Get your API key
+## 2. Get your bot token (v4.0 Telegram-style onboarding)
 
 1. Go to **https://app.chatlytics.ai**.
 2. Sign in.
-3. Navigate to **Settings → API Keys**.
-4. Click **Create Key**, give it a name like "claude-code", and copy the key.
-   You won't be able to see it again — store it somewhere safe.
+3. Navigate to **Bots → Create Bot**, name it something like "claude-code",
+   pick the WhatsApp session it should ride, and copy the `sk_bot_*` token.
+   **The plaintext token appears ONCE — store it somewhere safe.** Rotating
+   later regenerates the value.
 
 Also note your **session ID** from the dashboard (e.g. `abc12345_yourname`).
 You'll need it in step 4.
+
+If the Bots UI is not yet live in your account, you can provision a bot via
+the REST API directly:
+
+```bash
+curl -sS -X POST https://app.chatlytics.ai/api/v1/bots \
+  -H "Authorization: Bearer $CHATLYTICS_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"display_name": "claude-code", "session_id": "abc12345_yourname"}' \
+  | jq -r '.bot_token'
+```
+
+The returned `sk_bot_*` is your `CHATLYTICS_BOT_TOKEN`.
+
+**Legacy v3.37 fallback:** the plugin still accepts `CHATLYTICS_API_KEY`
+(operator/admin shared bearer). Skip step 2 if you're staying on the legacy
+path — but note that `chatlytics_poll` (long-poll inbound) requires a bot
+token.
 
 ---
 
@@ -67,13 +86,25 @@ Open your Claude Code settings file:
 - **Global (recommended for beta):** `~/.claude/settings.json` on macOS/Linux,
   `%USERPROFILE%\.claude\settings.json` on Windows.
 
-Add or merge the following `env` block:
+Add or merge the following `env` block (recommended v4.0 shape):
 
 ```json
 {
   "env": {
     "CHATLYTICS_API_URL": "https://app.chatlytics.ai",
-    "CHATLYTICS_API_KEY": "paste-your-key-here",
+    "CHATLYTICS_BOT_TOKEN": "sk_bot_paste-your-token-here",
+    "CHATLYTICS_SESSION": "your-session-id"
+  }
+}
+```
+
+Or, for legacy v3.37 setups still on the operator api_key:
+
+```json
+{
+  "env": {
+    "CHATLYTICS_API_URL": "https://app.chatlytics.ai",
+    "CHATLYTICS_API_KEY": "paste-your-api-key-here",
     "CHATLYTICS_SESSION": "your-session-id"
   }
 }
@@ -125,8 +156,9 @@ Open WhatsApp on your phone and verify the message landed.
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| `❌ Chatlytics API rejected the key (HTTP 401)` | API key wrong, expired, or revoked | Re-copy from app.chatlytics.ai → Settings → API Keys. Update `.claude/settings.json`. Restart Claude Code. |
-| `❌ Chatlytics API rejected the key (HTTP 403)` | Key valid but lacks permission | Contact support — your account may not be enabled for API access yet. |
+| `❌ Chatlytics API rejected the credential (HTTP 401)` | Bot token (or legacy api_key) wrong, expired, revoked, or grace-window-expired after rotation | If on `CHATLYTICS_BOT_TOKEN`: rotate at app.chatlytics.ai → Bots → rotate-token, copy the new `sk_bot_*`, update `.claude/settings.json`, restart Claude Code. If on legacy `CHATLYTICS_API_KEY`: re-copy from Settings → API Keys. |
+| `❌ Chatlytics API rejected the credential (HTTP 403)` | Credential valid but lacks permission for the requested action (bot's `permission_scope` blocks it) | Either pick a tool inside the bot's allowed actions, or update the bot's `permission_scope` at app.chatlytics.ai → Bots → <bot> → Permissions. Legacy api_key path: contact support — your account may not be enabled. |
+| `chatlytics_poll requires CHATLYTICS_BOT_TOKEN` | Tried to long-poll while only `CHATLYTICS_API_KEY` is set | Long-poll inbound is bot-scoped. Provision a bot token (step 2 above) and add `CHATLYTICS_BOT_TOKEN` to `.claude/settings.json`. |
 | `network error calling .../health` or `AbortError` | `CHATLYTICS_API_URL` wrong, or your network can't reach it | Double-check the URL has no trailing slash and is `https://app.chatlytics.ai` (not `http://`, not your local IP). |
 | `⚠️ webhook_registered is not true` | WhatsApp session disconnected or never paired | Open https://app.chatlytics.ai → Sessions. Re-scan the QR code from WhatsApp on your phone. |
 | `No WhatsApp contact, group, or channel found matching "X"` | Name doesn't match any chat | Ask Claude to "search my WhatsApp for X" — the search tool is fuzzier than send/read. |
@@ -138,7 +170,7 @@ Open WhatsApp on your phone and verify the message landed.
 
 ## 8. Going further
 
-The plugin ships **8 MCP tools**:
+The plugin ships **9 MCP tools**:
 
 - `chatlytics_send` — send a message
 - `chatlytics_read` — read recent messages
@@ -146,9 +178,11 @@ The plugin ships **8 MCP tools**:
 - `chatlytics_directory` — browse all chats
 - `chatlytics_actions` — list the full ~100-action catalog
 - `chatlytics_health` — connection status
-- `chatlytics_login` — validate your API key
+- `chatlytics_login` — validate your bot token / api key
 - `chatlytics_dispatch` — invoke any action by name (create groups, send
   polls, react to messages, manage labels, change presence, send media, etc.)
+- `chatlytics_poll` — long-poll for inbound WhatsApp messages addressed to
+  your bot (webhook-less). Requires `CHATLYTICS_BOT_TOKEN`.
 
 For the full catalog and advanced patterns, see
 [`skills/chatlytics/SKILL.md`](./skills/chatlytics/SKILL.md). It's the same

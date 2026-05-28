@@ -1,40 +1,38 @@
 # Chatlytics Plugin for Claude Code
 
-> **The fastest path from `claude plugin install` to your first WhatsApp message.**
+> **Like a Telegram bot, but for your WhatsApp.** Paste a bot token,
+> get a WhatsApp-driven agent.
 
-WhatsApp messaging superpowers for your Claude Code agent — send to anyone, read any chat, search the directory, dispatch arbitrary Chatlytics actions. Backed by the [Chatlytics](https://chatlytics.ai) REST API. **Zero setup beyond two env vars. Self-contained 715 KB bundle. No `npm install` required.**
-
-[![npm](https://img.shields.io/npm/v/@chatlytics/claude-code.svg)](https://www.npmjs.com/package/@chatlytics/claude-code) [![Node](https://img.shields.io/node/v/@chatlytics/claude-code.svg)](https://www.npmjs.com/package/@chatlytics/claude-code) [![License](https://img.shields.io/npm/l/@chatlytics/claude-code.svg)](LICENSE)
+Give your Claude Code agent WhatsApp messaging superpowers via the
+[Chatlytics](https://chatlytics.ai) REST API.
 
 The plugin ships:
 
-- **8 MCP tools** — `chatlytics_send`, `chatlytics_read`, `chatlytics_search`,
+- **9 MCP tools** — `chatlytics_send`, `chatlytics_read`, `chatlytics_search`,
   `chatlytics_directory`, `chatlytics_actions`, `chatlytics_health`,
-  `chatlytics_login`, `chatlytics_dispatch`.
-- **A skill** that teaches Claude Code *when* and *how* to use WhatsApp —
-  disambiguation patterns, name resolution, error handling, dispatch
-  composition.
-
-## Why chatlytics-claude-code?
-
-- **Name-first, JID-second** — say "send hello to Joe" or "read the marketing
-  channel"; the plugin resolves names through the Chatlytics directory before
-  sending. Ambiguous names return a picker error with candidates so the agent
-  can prompt the user to disambiguate.
-- **Self-contained bundle** — single ~715 KB ESM file (esbuild). No
-  `npm install` for end users; the bundle ships every dependency inline.
-- **Strict JID validation** — matches the Python sibling's regex
-  (`/@(c\.us|g\.us|lid|newsletter)$/i`); ambiguous chat-id strings (bare
-  phone numbers, display names) never reach the gateway. Pair with
-  `chatlytics_search` for human-readable input.
-- **Dispatch escape hatch** — `chatlytics_dispatch` exposes any Chatlytics
-  REST action by name, so the plugin is never the bottleneck when a new
-  Chatlytics capability ships.
-- **Cross-stack parity** — same contract as the Python
-  [chatlytics-hermes](https://pypi.org/project/chatlytics-hermes/) plugin
-  (v3.0+). Build agents in either runtime; the surface stays consistent.
+  `chatlytics_login`, `chatlytics_dispatch`, `chatlytics_poll`.
+- **A skill** that teaches Claude Code when and how to use WhatsApp.
 
 > **New here? Read [QUICKSTART.md](./QUICKSTART.md) — first WhatsApp message from Claude Code in under 5 minutes.**
+
+## What's new in v2.0 (Phase 337 — CC-PLUGIN-V2)
+
+- **Telegram-style "paste your bot token" onboarding.** The plugin now reads
+  `CHATLYTICS_BOT_TOKEN` (`sk_bot_*`), verifies the token at startup via
+  `GET /api/v1/bot/me`, and logs the resolved bot identity (`display_name`
+  + 8-char fingerprint — INV-02, plaintext never leaves the operator
+  machine).
+- **`chatlytics_poll` MCP tool** drives the v4.0 long-poll endpoint
+  (`GET /api/v1/bot/updates` + `POST /api/v1/bot/updates/ack`). Agents can
+  receive WhatsApp messages addressed to the bot without exposing a public
+  webhook URL.
+- **Fail-open on transient outage.** Both `/bot/me/tools` (catalog filter)
+  and `/bot/me` (identity verify) degrade gracefully — server outage during
+  Claude Code startup widens the tool catalog but never blocks boot.
+- **`.mcp.json` propagates `CHATLYTICS_BOT_TOKEN`** in addition to the
+  legacy 3 env vars. Back-compat: `CHATLYTICS_API_KEY` continues to work.
+- **5 new bundle-behavior smoke assertions** covering identity log, fail-open,
+  poll querystring, ack ordering, and api_key-mode rejection of `chatlytics_poll`.
 
 ## Install
 
@@ -69,12 +67,19 @@ Set these environment variables in your Claude Code settings
 
 ```
 CHATLYTICS_API_URL=https://app.chatlytics.ai
-CHATLYTICS_API_KEY=your-api-key
-CHATLYTICS_SESSION=your-session-id   # optional
+CHATLYTICS_BOT_TOKEN=sk_bot_your-bot-token        # preferred (v4.0+)
+CHATLYTICS_SESSION=your-session-id                # optional
+# CHATLYTICS_API_KEY=your-api-key                 # legacy v3.37 fallback (see note)
 ```
 
-The plugin's `.mcp.json` declares these three vars and Claude Code passes
+The plugin's `.mcp.json` declares all four vars and Claude Code passes
 them through to the MCP server stdio process.
+
+**Note on `CHATLYTICS_API_KEY`:** v3.37 operators using the shared admin
+api_key bearer can keep using it — the plugin falls back to it when
+`CHATLYTICS_BOT_TOKEN` is unset. The legacy path stays back-compat for the
+8 v3.37 tools but cannot drive `chatlytics_poll` (which is bot-bearer
+scoped on the server side). New installs should use `CHATLYTICS_BOT_TOKEN`.
 
 ## Verify install
 
@@ -102,7 +107,7 @@ with a clear error.
 
 Just ask Claude Code:
 
-- "Send a WhatsApp message to Joe saying hello"
+- "Send a WhatsApp message to Omer saying hello"
 - "Read my recent WhatsApp messages from the Team Chat group"
 - "Search for the marketing channel"
 - "Check if WhatsApp is connected"

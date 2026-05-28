@@ -6,6 +6,46 @@
 
 All notable changes to the Chatlytics Claude Code plugin are documented here.
 
+## 2.0.0 — 2026-05-28 (v4.0 CC-PLUGIN-V2 — Phase 337)
+
+### Added
+
+- **Telegram-style "paste your bot token" onboarding.** Plugin reads
+  `CHATLYTICS_BOT_TOKEN` (`sk_bot_*`), verifies at boot via
+  `GET /api/v1/bot/me`, logs identity (`display_name` + 8-char fingerprint,
+  never plaintext — INV-02).
+- **`chatlytics_poll` MCP tool.** Drives the v4.0 long-poll endpoint
+  (`GET /api/v1/bot/updates` + `POST /api/v1/bot/updates/ack`) — agents can
+  receive inbound WhatsApp messages without exposing an HTTP webhook URL.
+  Bot-token mode only (P335 endpoint is bot-bearer-scoped).
+- **`.mcp.json` declares `CHATLYTICS_BOT_TOKEN`** alongside the existing 3 env
+  vars (back-compat: `CHATLYTICS_API_KEY` still passed through).
+- **5 new bundle-behavior smoke assertions** in `servers/test/smoke.js`:
+  bot identity log + INV-02 regression, fail-open on `/bot/me` outage,
+  poll envelope passthrough, ack ordering (POST /ack BEFORE GET /updates),
+  and api_key-mode rejection of `chatlytics_poll`.
+
+### Changed
+
+- README + QUICKSTART rewritten with Telegram-style framing. Lead env var
+  is `CHATLYTICS_BOT_TOKEN`; `CHATLYTICS_API_KEY` documented as legacy v3.37
+  fallback (not removed — back-compat).
+- SKILL.md gains an "Authentication" section and an "Inbound: long-poll
+  mode" section.
+- MCP server version `1.2.1` → `2.0.0` (preserves the 1.2.1 marketing-flair
+  release in between).
+- Tool count `8 → 9` (added `chatlytics_poll`).
+- Pre-existing fail-OPEN smoke now asserts 9 registered tools instead of 8.
+
+### Compatibility
+
+- Back-compat with v1.x: existing `CHATLYTICS_API_KEY` users continue to
+  function for all 8 v3.37 tools. The new `chatlytics_poll` tool returns
+  a clear migration error when called in api_key mode.
+- Server-side dependency: requires chatlytics v3.37+ for `/api/v1/bot/me`
+  + `/api/v1/bot/me/tools` (P333/P334) and v4.0 (P335) for the long-poll
+  endpoints (`/api/v1/bot/updates(/ack)`).
+
 ## [1.2.1] - 2026-05-18
 
 Cosmetic release — no functional changes, no API surface changes.

@@ -21075,9 +21075,45 @@ async function fetchAllowedTools() {
 var allowed = await fetchAllowedTools();
 var allow = (name) => allowed === null || allowed.has(name);
 if (allowed !== null) {
-  console.error(`[chatlytics-mcp] Filtered tool catalog: ${allowed.size}/8 tools allowed (${[...allowed].join(", ")})`);
+  console.error(`[chatlytics-mcp] Filtered tool catalog: ${allowed.size}/9 tools allowed (${[...allowed].join(", ")})`);
 }
-var server = new McpServer({ name: "chatlytics", version: "1.2.0" });
+async function fetchBotIdentity() {
+  if (AUTH_MODE !== "bot_token") return null;
+  try {
+    const res = await fetch(`${API_URL}/api/v1/bot/me`, {
+      headers: { Authorization: `Bearer ${BOT_TOKEN}` },
+      signal: AbortSignal.timeout(1e4)
+    });
+    if (res.status === 401 || res.status === 403) {
+      console.error(
+        `[chatlytics-mcp] /bot/me returned ${res.status} \u2014 your CHATLYTICS_BOT_TOKEN appears invalid or revoked. Rotate at https://app.chatlytics.ai \u2192 Bots \u2192 rotate-token, then update .claude/settings.json and restart Claude Code.`
+      );
+      return null;
+    }
+    if (!res.ok) {
+      console.error(`[chatlytics-mcp] /bot/me returned ${res.status} \u2014 continuing fail-open`);
+      return null;
+    }
+    const data = await res.json();
+    return data;
+  } catch (e) {
+    console.error(`[chatlytics-mcp] /bot/me fetch failed: ${e.message} \u2014 continuing fail-open`);
+    return null;
+  }
+}
+var botIdentity = await fetchBotIdentity();
+if (botIdentity && botIdentity.display_name) {
+  const fp = botIdentity.bot_token_fp || "unknown";
+  console.error(`[chatlytics-mcp] Bot identity: ${botIdentity.display_name} (fp=${fp})`);
+}
+var DEFAULT_LONGPOLL_TIMEOUT_MS = 25e3;
+var MAX_LONGPOLL_TIMEOUT_MS = 6e4;
+var MIN_LONGPOLL_TIMEOUT_MS = 1e3;
+function clampLongPollTimeout(value) {
+  const n = typeof value === "number" && Number.isFinite(value) ? value : DEFAULT_LONGPOLL_TIMEOUT_MS;
+  return Math.min(Math.max(MIN_LONGPOLL_TIMEOUT_MS, n), MAX_LONGPOLL_TIMEOUT_MS);
+}
+var server = new McpServer({ name: "chatlytics", version: "2.0.0" });
 function looksLikeJid(s) {
   if (typeof s !== "string" || s.length === 0) return false;
   return /@(c\.us|g\.us|lid|newsletter)$/i.test(s);
@@ -21314,6 +21350,108 @@ if (allow("chatlytics_dispatch")) {
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       } catch (e) {
         return { isError: true, content: [{ type: "text", text: e.message }] };
+      }
+    }
+  );
+}
+if (allow("chatlytics_poll")) {
+  server.tool(
+    "chatlytics_poll",
+    "Poll the Chatlytics long-poll endpoint for inbound WhatsApp messages addressed to your bot. Returns immediately with any queued envelopes, or blocks up to timeout_ms for new arrivals. Pass the `cursor` from the previous response to resume; pass `ack` (cursor) to advance the server-side delivery cursor in the same call. Requires CHATLYTICS_BOT_TOKEN (sk_bot_*) \u2014 bot-scoped endpoint.",
+    {
+      cursor: external_exports.string().optional().describe("Opaque cursor from a previous response. Omit on first call."),
+      timeout_ms: external_exports.number().optional().describe(`Max ms to block waiting for new envelopes. Default ${DEFAULT_LONGPOLL_TIMEOUT_MS}, clamped [${MIN_LONGPOLL_TIMEOUT_MS}, ${MAX_LONGPOLL_TIMEOUT_MS}].`),
+      ack: external_exports.string().optional().describe("Cursor of the latest envelope you've handled. If set, POSTs /bot/updates/ack BEFORE the GET. Best-effort \u2014 ack failures log but do not block.")
+    },
+    async ({ cursor, timeout_ms, ack }) => {
+      if (AUTH_MODE !== "bot_token") {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `chatlytics_poll requires CHATLYTICS_BOT_TOKEN (sk_bot_*) \u2014 long-poll inbound is bot-scoped (P335). The legacy CHATLYTICS_API_KEY operator bearer cannot drive this endpoint. Provision a bot token at https://app.chatlytics.ai \u2192 Bots, then add CHATLYTICS_BOT_TOKEN to your .claude/settings.json env block and restart Claude Code.`
+            }
+          ]
+        };
+      }
+      if (ack && typeof ack === "string" && ack.length > 0) {
+        try {
+          const ackRes = await fetch(`${API_URL}/api/v1/bot/updates/ack`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${BOT_TOKEN}`
+            },
+            body: JSON.stringify({ cursor: ack }),
+            signal: AbortSignal.timeout(1e4)
+          });
+          if (!ackRes.ok) {
+            console.error(`[chatlytics-mcp] chatlytics_poll: ack returned HTTP ${ackRes.status} \u2014 proceeding with GET`);
+          }
+        } catch (e) {
+          console.error(`[chatlytics-mcp] chatlytics_poll: ack network error: ${e.message} \u2014 proceeding with GET`);
+        }
+      }
+      const tms = clampLongPollTimeout(timeout_ms);
+      const qs = new URLSearchParams();
+      if (cursor) qs.set("cursor", cursor);
+      qs.set("timeout_ms", String(tms));
+      const url = `${API_URL}/api/v1/bot/updates?${qs.toString()}`;
+      try {
+        const res = await fetch(url, {
+          method: "GET",
+          headers: { Authorization: `Bearer ${BOT_TOKEN}` },
+          // Allow the server's clamped wait plus a 5s buffer so we don't
+          // race the server's response with our own AbortSignal.
+          signal: AbortSignal.timeout(tms + 5e3)
+        });
+        const text = await res.text();
+        let data;
+        try {
+          data = JSON.parse(text);
+        } catch {
+          data = text;
+        }
+        if (!res.ok) {
+          if (res.status === 401 || res.status === 403) {
+            return {
+              isError: true,
+              content: [
+                {
+                  type: "text",
+                  text: `Chatlytics rejected the bot token (HTTP ${res.status}). Verify CHATLYTICS_BOT_TOKEN in .claude/settings.json matches the value from https://app.chatlytics.ai \u2192 Bots. If you rotated recently, the old token's 24h grace window may have expired.`
+                }
+              ]
+            };
+          }
+          if (res.status === 400) {
+            return {
+              isError: true,
+              content: [
+                {
+                  type: "text",
+                  text: `Chatlytics returned HTTP 400 from /bot/updates \u2014 most often 'invalid_cursor' after a token rotation. Drop the cursor and re-poll with no cursor (fresh start). Raw: ${typeof data === "string" ? data.slice(0, 200) : JSON.stringify(data).slice(0, 200)}`
+                }
+              ]
+            };
+          }
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: `HTTP ${res.status}: ${typeof data === "string" ? data : JSON.stringify(data)}`
+              }
+            ]
+          };
+        }
+        return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+      } catch (e) {
+        return {
+          isError: true,
+          content: [{ type: "text", text: `chatlytics_poll network error: ${e.message}` }]
+        };
       }
     }
   );
