@@ -6,6 +6,36 @@
 
 All notable changes to the Chatlytics Claude Code plugin are documented here.
 
+## 2.1.1 — 2026-06-06
+
+### Fixed
+
+- **`chatlytics_send` routes bot-token callers through the gated
+  `POST /api/v1/send`.** Server v4.5.4 denies send-class verbs on the generic
+  `POST /api/v1/actions` dispatcher for bot tokens (`sk_bot_*`) so that pairing
+  (`checkBotPairing`) + session-pin gates always run (INV-09) — a bot dispatching
+  `{action:"send"}` now gets `403 bot_send_via_dispatch_denied`. When
+  `AUTH_MODE === "bot_token"`, `chatlytics_send` resolves the recipient name to a
+  JID (mirrors `chatlytics_read`) and posts `{chatId, text}` to `/api/v1/send`;
+  the server pins the session to the bot's own. Operator `CHATLYTICS_API_KEY`
+  callers keep the legacy `/api/v1/actions` path (server-side session default) to
+  avoid a 400 regression when no session is configured. Bundle rebuilt.
+
+### Known limitations
+
+- Richer sends (poll/list/media) via `chatlytics_dispatch` remain operator-only
+  for now — bot tokens get `403 bot_action_not_dispatchable` until a gated
+  dispatch path lands. Use `chatlytics_send` for text.
+
+## 2.1.0 — 2026-06-05
+
+### Changed
+
+- **Default base URL is now `https://node.chatlytics.ai`** (Cloudflare-proxied
+  tunnel → hpg5:8050). Token-only onboarding: a user only sets
+  `CHATLYTICS_BOT_TOKEN` — no URL, username, or password. `CHATLYTICS_BASE_URL`
+  stays an optional override.
+
 ## 2.0.0 — 2026-05-28 (v4.0 CC-PLUGIN-V2 — Phase 337)
 
 ### Added

@@ -21168,6 +21168,15 @@ if (allow("chatlytics_send")) {
     },
     async ({ to, text, session }) => {
       try {
+        if (AUTH_MODE === "bot_token") {
+          const chatId = await resolveChatId(to);
+          const result2 = await callApi("POST", "/api/v1/send", {
+            chatId,
+            text,
+            session: session || DEFAULT_SESSION || void 0
+          });
+          return { content: [{ type: "text", text: JSON.stringify(result2, null, 2) }] };
+        }
         const result = await callApi("POST", "/api/v1/actions", {
           action: "send",
           params: { chatId: to, text },

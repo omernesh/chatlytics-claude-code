@@ -231,6 +231,25 @@ if (allow("chatlytics_send")) {
     },
     async ({ to, text, session }) => {
       try {
+        // v2.1.1: bot tokens (sk_bot_*) MUST send via the gated POST /api/v1/send
+        // route so the server runs executeOutboundGates → checkBotPairing +
+        // session-pin (INV-09). Server v4.5.4 denies send-class verbs on the
+        // generic /api/v1/actions dispatcher for bot callers
+        // (403 bot_send_via_dispatch_denied). /api/v1/send needs a real JID, so
+        // resolve human names first (mirrors chatlytics_read). The server pins
+        // the session to the bot's own for bot tokens, so session is optional
+        // there. Operator api_key callers keep the legacy /api/v1/actions path
+        // (which server-side-defaults the session) to avoid a 400 regression
+        // when no session is configured.
+        if (AUTH_MODE === "bot_token") {
+          const chatId = await resolveChatId(to);
+          const result = await callApi("POST", "/api/v1/send", {
+            chatId,
+            text,
+            session: session || DEFAULT_SESSION || undefined,
+          });
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        }
         const result = await callApi("POST", "/api/v1/actions", {
           action: "send",
           params: { chatId: to, text },
