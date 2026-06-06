@@ -21011,14 +21011,14 @@ var StdioServerTransport = class {
 };
 
 // chatlytics-mcp.js
-var API_URL = process.env.CHATLYTICS_API_URL || "http://localhost:8050";
+var API_URL = process.env.CHATLYTICS_API_URL || "https://node.chatlytics.ai";
 var BOT_TOKEN = process.env.CHATLYTICS_BOT_TOKEN || "";
 var API_KEY = process.env.CHATLYTICS_API_KEY || "";
 var DEFAULT_SESSION = process.env.CHATLYTICS_SESSION || "";
 var AUTH_VALUE = BOT_TOKEN || API_KEY;
 var AUTH_MODE = BOT_TOKEN ? "bot_token" : API_KEY ? "api_key" : "none";
 if (!process.env.CHATLYTICS_API_URL) {
-  console.error("[chatlytics-mcp] Warning: CHATLYTICS_API_URL not set \u2014 using default http://localhost:8050");
+  console.error("[chatlytics-mcp] CHATLYTICS_API_URL not set \u2014 using default https://node.chatlytics.ai");
 }
 if (AUTH_MODE === "none") {
   console.error("[chatlytics-mcp] Warning: neither CHATLYTICS_BOT_TOKEN nor CHATLYTICS_API_KEY set \u2014 API calls will be unauthenticated");

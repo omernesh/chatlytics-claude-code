@@ -21,6 +21,11 @@ The plugin verifies its identity at boot via `GET /api/v1/bot/me` (bot-token
 mode only) and logs `Bot identity: <display_name> (fp=<8-char>)`. INV-02 —
 the plaintext token is NEVER logged.
 
+`CHATLYTICS_API_URL` is **optional** — it defaults to
+`https://node.chatlytics.ai` (the hosted Chatlytics API). Set only
+`CHATLYTICS_BOT_TOKEN` for the standard hosted setup; override the URL only
+when self-hosting or pointing at a non-default endpoint.
+
 ## Available Tools
 
 | Tool | Use When |

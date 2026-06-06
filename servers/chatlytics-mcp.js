@@ -7,7 +7,7 @@ import { z } from "zod";
 // is what callApi() emits in `Authorization: Bearer <value>` regardless of
 // which env var supplied it. AUTH_MODE is the LABEL emitted at boot for
 // observability — NEVER log the raw value (INV-02 token plaintext discipline).
-const API_URL = process.env.CHATLYTICS_API_URL || "http://localhost:8050";
+const API_URL = process.env.CHATLYTICS_API_URL || "https://node.chatlytics.ai";
 const BOT_TOKEN = process.env.CHATLYTICS_BOT_TOKEN || "";
 const API_KEY = process.env.CHATLYTICS_API_KEY || "";
 const DEFAULT_SESSION = process.env.CHATLYTICS_SESSION || "";
@@ -16,7 +16,7 @@ const AUTH_MODE = BOT_TOKEN ? "bot_token" : (API_KEY ? "api_key" : "none");
 
 // IN-01: Warn on missing env vars at startup
 if (!process.env.CHATLYTICS_API_URL) {
-  console.error("[chatlytics-mcp] Warning: CHATLYTICS_API_URL not set — using default http://localhost:8050");
+  console.error("[chatlytics-mcp] CHATLYTICS_API_URL not set — using default https://node.chatlytics.ai");
 }
 if (AUTH_MODE === "none") {
   console.error("[chatlytics-mcp] Warning: neither CHATLYTICS_BOT_TOKEN nor CHATLYTICS_API_KEY set — API calls will be unauthenticated");

@@ -62,13 +62,20 @@ The bundle is the file Claude Code actually runs; ship it on every release.
 
 ## Setup
 
-Set these environment variables in your Claude Code settings
-(`.claude/settings.json` `env` block, or your shell):
+Minimal setup is a single env var — your bot token. Set it in your Claude
+Code settings (`.claude/settings.json` `env` block, or your shell):
 
 ```
-CHATLYTICS_API_URL=https://app.chatlytics.ai
-CHATLYTICS_BOT_TOKEN=sk_bot_your-bot-token        # preferred (v4.0+)
-CHATLYTICS_SESSION=your-session-id                # optional
+CHATLYTICS_BOT_TOKEN=sk_bot_your-bot-token        # the only required var
+```
+
+That's it. `CHATLYTICS_API_URL` is **optional** — it defaults to
+`https://node.chatlytics.ai` (the hosted Chatlytics API). Override it only
+if you self-host or point at a non-default endpoint:
+
+```
+# CHATLYTICS_API_URL=https://node.chatlytics.ai   # optional — this is the default
+# CHATLYTICS_SESSION=your-session-id              # optional
 # CHATLYTICS_API_KEY=your-api-key                 # legacy v3.37 fallback (see note)
 ```
 
@@ -94,10 +101,12 @@ Alternative — run the standalone smoke test from a checked-out repo:
 
 ```bash
 cd servers
-CHATLYTICS_API_URL=https://app.chatlytics.ai \
-CHATLYTICS_API_KEY=your-api-key \
+CHATLYTICS_BOT_TOKEN=sk_bot_your-bot-token \
 npm test
 ```
+
+`CHATLYTICS_API_URL` is optional and defaults to `https://node.chatlytics.ai`;
+override it inline only if you self-host.
 
 The test calls `GET ${CHATLYTICS_API_URL}/health` with your bearer token and
 asserts that `webhook_registered: true`. Exits 0 on success, 1 on failure
