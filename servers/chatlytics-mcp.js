@@ -14,6 +14,22 @@ const DEFAULT_SESSION = process.env.CHATLYTICS_SESSION || "";
 const AUTH_VALUE = BOT_TOKEN || API_KEY;
 const AUTH_MODE = BOT_TOKEN ? "bot_token" : (API_KEY ? "api_key" : "none");
 
+// v2.1.2 — first-use onboarding. When no bot token is configured
+// (AUTH_MODE === "none"), every user-facing DATA tool short-circuits with this
+// relayable prompt instead of falling through to an unauthenticated 401. The
+// 401/403 path in callApi() is the WRONG-token message (a token IS set but bad)
+// and stays distinct. Do NOT mention BotDaddy — that onboarding route isn't live.
+const NO_TOKEN_PROMPT = [
+  "⚠️ Chatlytics needs a bot token before it can send or read WhatsApp.",
+  "",
+  "No CHATLYTICS_BOT_TOKEN is configured yet. Get one (it looks like `sk_bot_…`) either way:",
+  "  • Web UI — sign in at https://app.chatlytics.ai → Bots → Create Bot, then copy the token (shown only once).",
+  "  • CLI — `chatlytics bots create --session <your-session-id> --name <bot-name>` (needs an admin API key).",
+  "",
+  "Then add it to the `env` block of your `.claude/settings.json` as `CHATLYTICS_BOT_TOKEN` and restart Claude Code.",
+  "You can re-check anytime with the `chatlytics_login` tool.",
+].join("\n");
+
 // IN-01: Warn on missing env vars at startup
 if (!process.env.CHATLYTICS_API_URL) {
   console.error("[chatlytics-mcp] CHATLYTICS_API_URL not set — using default https://node.chatlytics.ai");
@@ -230,6 +246,9 @@ if (allow("chatlytics_send")) {
       session: z.string().optional().describe("Session ID (uses default if omitted)"),
     },
     async ({ to, text, session }) => {
+      if (AUTH_MODE === "none") {
+        return { isError: true, content: [{ type: "text", text: NO_TOKEN_PROMPT }] };
+      }
       try {
         // v2.1.1: bot tokens (sk_bot_*) MUST send via the gated POST /api/v1/send
         // route so the server runs executeOutboundGates → checkBotPairing +
@@ -273,6 +292,9 @@ if (allow("chatlytics_read")) {
       limit: z.number().optional().default(10).describe("Number of messages to fetch (default 10)"),
     },
     async ({ chatId, limit }) => {
+      if (AUTH_MODE === "none") {
+        return { isError: true, content: [{ type: "text", text: NO_TOKEN_PROMPT }] };
+      }
       try {
         // CC-P6: resolve human names to JIDs before calling readMessages
         // (which silently fails on non-JID input).
@@ -298,6 +320,9 @@ if (allow("chatlytics_search")) {
       query: z.string().describe("Search query (name, phone number, or keyword)"),
     },
     async ({ query }) => {
+      if (AUTH_MODE === "none") {
+        return { isError: true, content: [{ type: "text", text: NO_TOKEN_PROMPT }] };
+      }
       try {
         const result = await callApi("POST", "/api/v1/actions", {
           action: "search",
@@ -318,6 +343,9 @@ if (allow("chatlytics_actions")) {
     "List all available WhatsApp actions supported by Chatlytics",
     {},
     async () => {
+      if (AUTH_MODE === "none") {
+        return { isError: true, content: [{ type: "text", text: NO_TOKEN_PROMPT }] };
+      }
       try {
         const result = await callApi("GET", "/api/v1/actions");
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
@@ -339,6 +367,9 @@ if (allow("chatlytics_directory")) {
       limit: z.number().optional().describe("Max results to return"),
     },
     async ({ type, search, limit }) => {
+      if (AUTH_MODE === "none") {
+        return { isError: true, content: [{ type: "text", text: NO_TOKEN_PROMPT }] };
+      }
       try {
         // CC-P10: clean URL build — single conditional path, no double-prepend.
         const params = new URLSearchParams();
@@ -391,18 +422,12 @@ if (allow("chatlytics_login")) {
     {},
     async () => {
       if (!AUTH_VALUE) {
+        // v2.1.2: surface the shared first-use onboarding prompt (Web UI + CLI
+        // routes to get a sk_bot_* token). Fixes the stale "Settings → API Keys"
+        // guidance — bots are provisioned at Bots → Create Bot.
         return {
           isError: true,
-          content: [
-            {
-              type: "text",
-              text:
-                `❌ Neither CHATLYTICS_BOT_TOKEN (preferred, v4.0+) nor CHATLYTICS_API_KEY ` +
-                `(legacy v3.37) is set. Add one to your .claude/settings.json env block ` +
-                `(or shell) and restart Claude Code. Get a key at ` +
-                `https://app.chatlytics.ai → Settings → API Keys.`,
-            },
-          ],
+          content: [{ type: "text", text: NO_TOKEN_PROMPT }],
         };
       }
       try {
@@ -468,6 +493,9 @@ if (allow("chatlytics_dispatch")) {
       session: z.string().optional().describe("Session ID (uses default if omitted)"),
     },
     async ({ action, target, parameters, session }) => {
+      if (AUTH_MODE === "none") {
+        return { isError: true, content: [{ type: "text", text: NO_TOKEN_PROMPT }] };
+      }
       try {
         const body = { action };
         if (target !== undefined) body.target = target;
@@ -511,6 +539,9 @@ if (allow("chatlytics_poll")) {
       ack: z.string().optional().describe("Cursor of the latest envelope you've handled. If set, POSTs /bot/updates/ack BEFORE the GET. Best-effort — ack failures log but do not block. NOTE: pass the SAME value as `cursor` in the same call to ack-and-resume; passing `ack` without `cursor` will ack then re-poll from seq 0."),
     },
     async ({ cursor, timeout_ms, ack }) => {
+      if (AUTH_MODE === "none") {
+        return { isError: true, content: [{ type: "text", text: NO_TOKEN_PROMPT }] };
+      }
       if (AUTH_MODE !== "bot_token") {
         return {
           isError: true,

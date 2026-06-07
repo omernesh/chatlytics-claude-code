@@ -6,6 +6,26 @@
 
 All notable changes to the Chatlytics Claude Code plugin are documented here.
 
+## [2.1.2] — 2026-06-07
+
+### Added
+
+- **First-use onboarding: data tools now return a clear get-a-token prompt
+  (Web UI + CLI routes) when no `CHATLYTICS_BOT_TOKEN` is set, instead of a
+  confusing 401.** When `AUTH_MODE === "none"`, `chatlytics_send`,
+  `chatlytics_dispatch`, `chatlytics_read`, `chatlytics_search`,
+  `chatlytics_poll`, `chatlytics_actions`, and `chatlytics_directory`
+  short-circuit with a relayable prompt telling the user a bot token is
+  required and how to get one (sign in → Bots → Create Bot, or
+  `chatlytics bots create`). `chatlytics_health` (diagnostics) and
+  `chatlytics_login` (recheck surface) are intentionally not guarded.
+
+### Fixed
+
+- **Stale `Settings → API Keys` wording → `Bots → Create Bot`.** The
+  `chatlytics_login` no-token branch wrongly pointed users at the old
+  API-Keys settings page; it now uses the shared onboarding prompt.
+
 ## 2.1.1 — 2026-06-06
 
 ### Fixed

@@ -21017,6 +21017,16 @@ var API_KEY = process.env.CHATLYTICS_API_KEY || "";
 var DEFAULT_SESSION = process.env.CHATLYTICS_SESSION || "";
 var AUTH_VALUE = BOT_TOKEN || API_KEY;
 var AUTH_MODE = BOT_TOKEN ? "bot_token" : API_KEY ? "api_key" : "none";
+var NO_TOKEN_PROMPT = [
+  "\u26A0\uFE0F Chatlytics needs a bot token before it can send or read WhatsApp.",
+  "",
+  "No CHATLYTICS_BOT_TOKEN is configured yet. Get one (it looks like `sk_bot_\u2026`) either way:",
+  "  \u2022 Web UI \u2014 sign in at https://app.chatlytics.ai \u2192 Bots \u2192 Create Bot, then copy the token (shown only once).",
+  "  \u2022 CLI \u2014 `chatlytics bots create --session <your-session-id> --name <bot-name>` (needs an admin API key).",
+  "",
+  "Then add it to the `env` block of your `.claude/settings.json` as `CHATLYTICS_BOT_TOKEN` and restart Claude Code.",
+  "You can re-check anytime with the `chatlytics_login` tool."
+].join("\n");
 if (!process.env.CHATLYTICS_API_URL) {
   console.error("[chatlytics-mcp] CHATLYTICS_API_URL not set \u2014 using default https://node.chatlytics.ai");
 }
@@ -21167,6 +21177,9 @@ if (allow("chatlytics_send")) {
       session: external_exports.string().optional().describe("Session ID (uses default if omitted)")
     },
     async ({ to, text, session }) => {
+      if (AUTH_MODE === "none") {
+        return { isError: true, content: [{ type: "text", text: NO_TOKEN_PROMPT }] };
+      }
       try {
         if (AUTH_MODE === "bot_token") {
           const chatId = await resolveChatId(to);
@@ -21198,6 +21211,9 @@ if (allow("chatlytics_read")) {
       limit: external_exports.number().optional().default(10).describe("Number of messages to fetch (default 10)")
     },
     async ({ chatId, limit }) => {
+      if (AUTH_MODE === "none") {
+        return { isError: true, content: [{ type: "text", text: NO_TOKEN_PROMPT }] };
+      }
       try {
         const resolved = await resolveChatId(chatId);
         const result = await callApi("POST", "/api/v1/actions", {
@@ -21219,6 +21235,9 @@ if (allow("chatlytics_search")) {
       query: external_exports.string().describe("Search query (name, phone number, or keyword)")
     },
     async ({ query }) => {
+      if (AUTH_MODE === "none") {
+        return { isError: true, content: [{ type: "text", text: NO_TOKEN_PROMPT }] };
+      }
       try {
         const result = await callApi("POST", "/api/v1/actions", {
           action: "search",
@@ -21237,6 +21256,9 @@ if (allow("chatlytics_actions")) {
     "List all available WhatsApp actions supported by Chatlytics",
     {},
     async () => {
+      if (AUTH_MODE === "none") {
+        return { isError: true, content: [{ type: "text", text: NO_TOKEN_PROMPT }] };
+      }
       try {
         const result = await callApi("GET", "/api/v1/actions");
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
@@ -21256,6 +21278,9 @@ if (allow("chatlytics_directory")) {
       limit: external_exports.number().optional().describe("Max results to return")
     },
     async ({ type, search, limit }) => {
+      if (AUTH_MODE === "none") {
+        return { isError: true, content: [{ type: "text", text: NO_TOKEN_PROMPT }] };
+      }
       try {
         const params = new URLSearchParams();
         if (type) params.set("type", type);
@@ -21295,12 +21320,7 @@ if (allow("chatlytics_login")) {
       if (!AUTH_VALUE) {
         return {
           isError: true,
-          content: [
-            {
-              type: "text",
-              text: `\u274C Neither CHATLYTICS_BOT_TOKEN (preferred, v4.0+) nor CHATLYTICS_API_KEY (legacy v3.37) is set. Add one to your .claude/settings.json env block (or shell) and restart Claude Code. Get a key at https://app.chatlytics.ai \u2192 Settings \u2192 API Keys.`
-            }
-          ]
+          content: [{ type: "text", text: NO_TOKEN_PROMPT }]
         };
       }
       try {
@@ -21351,6 +21371,9 @@ if (allow("chatlytics_dispatch")) {
       session: external_exports.string().optional().describe("Session ID (uses default if omitted)")
     },
     async ({ action, target, parameters, session }) => {
+      if (AUTH_MODE === "none") {
+        return { isError: true, content: [{ type: "text", text: NO_TOKEN_PROMPT }] };
+      }
       try {
         const body = { action };
         if (target !== void 0) body.target = target;
@@ -21374,6 +21397,9 @@ if (allow("chatlytics_poll")) {
       ack: external_exports.string().optional().describe("Cursor of the latest envelope you've handled. If set, POSTs /bot/updates/ack BEFORE the GET. Best-effort \u2014 ack failures log but do not block. NOTE: pass the SAME value as `cursor` in the same call to ack-and-resume; passing `ack` without `cursor` will ack then re-poll from seq 0.")
     },
     async ({ cursor, timeout_ms, ack }) => {
+      if (AUTH_MODE === "none") {
+        return { isError: true, content: [{ type: "text", text: NO_TOKEN_PROMPT }] };
+      }
       if (AUTH_MODE !== "bot_token") {
         return {
           isError: true,
