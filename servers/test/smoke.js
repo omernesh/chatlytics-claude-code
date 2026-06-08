@@ -10,7 +10,7 @@
 //     server, verifies the v4.0 MCP-SCOPED-01..03 contract:
 //       1. Env-var precedence (BOT_TOKEN beats API_KEY when both set)
 //       2. Legacy fallback (API_KEY emits Bearer when BOT_TOKEN unset)
-//       3. Fail-OPEN on /api/v1/bot/me/tools outage (all 8 tools register)
+//       3. Fail-OPEN on /api/v1/bot/me/tools outage (all 10 tools register)
 //
 // Exits 0 on success, 1 on first failure.
 //
@@ -734,6 +734,63 @@ async function assertSendUnifiedApiKeyMode() {
   }
 }
 
+// --- Assertion 9b (M2): chatlytics_send api_key mode WITHOUT a session still
+//     targets /api/v1/send, and the server's missing-session 400 is surfaced as
+//     an actionable error to the caller (NOT silently dropped). ---
+async function assertSendApiKeyNoSessionSurfacesError() {
+  const captureLog = [];
+  // Mock /api/v1/send to return a 400 with a session-shaped error whenever the
+  // request body has no session — mirroring the real server contract.
+  const { server, port } = await makeMockServer({
+    captureLog,
+    sendStatus: 400,
+    sendResponse: { error: "session is required" },
+  });
+  const API_KEY = "legacy_api_key_nosession_42";
+
+  try {
+    const result = await driveBundle({
+      env: {
+        CHATLYTICS_API_URL: `http://127.0.0.1:${port}`,
+        CHATLYTICS_BOT_TOKEN: "",
+        CHATLYTICS_API_KEY: API_KEY,
+        // CHATLYTICS_SESSION intentionally UNSET (no default session available)
+        CHATLYTICS_SESSION: "",
+      },
+      customToolCall: {
+        name: "chatlytics_send",
+        // JID input so resolveChatId returns immediately (no /actions search hop).
+        arguments: { to: "972544329000@c.us", text: "no session here" },
+      },
+      postCallWaitMs: 1200,
+    });
+    // The send MUST still target /api/v1/send (unification holds even with no session).
+    const sendReq = captureLog.find((r) => r.path === "/api/v1/send" && r.method === "POST");
+    if (!sendReq) {
+      fail(`send-nosession: POST /api/v1/send was not called. capture=${JSON.stringify(captureLog.map(c => `${c.method} ${c.url}`))}`);
+    }
+    // With no session available, the bundle sends `undefined` (omitted from JSON).
+    let parsed;
+    try { parsed = JSON.parse(sendReq.body); } catch { fail(`send-nosession: /send body not JSON. raw=${sendReq.body}`); }
+    if (parsed.session !== undefined) {
+      fail(`send-nosession: /send body session expected undefined (no default), got '${parsed.session}'`);
+    }
+    // The 400 missing-session error MUST be surfaced to the caller, not dropped.
+    const callResp = parseToolCallResponse(result.stdout);
+    if (!callResp) fail(`send-nosession: tools/call response not found. stdout=${result.stdout.slice(0, 600)}`);
+    if (callResp.result?.isError !== true) {
+      fail(`send-nosession: response missing isError:true (server 400 was dropped). resp=${JSON.stringify(callResp).slice(0, 400)}`);
+    }
+    const text = callResp.result?.content?.[0]?.text || "";
+    if (!/session/i.test(text)) {
+      fail(`send-nosession: surfaced error missing 'session'. text=${text.slice(0, 400)}`);
+    }
+    ok("v5.0/P6 (M2): chatlytics_send (api_key, no session) → /api/v1/send + server missing-session 400 surfaced as actionable error");
+  } finally {
+    server.close();
+  }
+}
+
 // --- Assertion 10: chatlytics_configure (bot mode) → PATCH /bot/me with translated body ---
 async function assertConfigureTranslatesBody() {
   const captureLog = [];
@@ -860,9 +917,10 @@ async function assertConfigureRejectsApiKeyMode() {
   await assertPollAckOrder();
   await assertPollRejectsApiKeyMode();
   await assertSendUnifiedApiKeyMode();
+  await assertSendApiKeyNoSessionSurfacesError();
   await assertConfigureTranslatesBody();
   await assertConfigureRejectsApiKeyMode();
-  console.log("[smoke] PASS — 11 bundle-behavior assertions green");
+  console.log("[smoke] PASS — 12 bundle-behavior assertions green");
   process.exit(0);
 })().catch((e) => {
   fail(`unhandled error: ${e?.stack || e}`);

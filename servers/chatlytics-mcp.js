@@ -250,7 +250,11 @@ if (allow("chatlytics_send")) {
         return { isError: true, content: [{ type: "text", text: NO_TOKEN_PROMPT }] };
       }
       try {
-        // v5.0/P6: UNIFIED send path — ALL auth modes now POST /api/v1/send.
+        // v5.0/P6: UNIFIED SEND path — ALL auth modes now POST /api/v1/send for
+        // the actual message-send step. (Scope note: this unifies the SEND call
+        // only. The read-only name→JID search hop below — resolveChatId() — still
+        // uses POST /api/v1/actions{action:"search"}, which is correct and
+        // unchanged: search is not a send-class verb and is permitted there.)
         // Previously only bot_token used /send while api_key/none fell through to
         // the generic /api/v1/actions dispatcher. Server v4.5.4 denies send-class
         // verbs on /api/v1/actions for bot callers (403
@@ -263,6 +267,16 @@ if (allow("chatlytics_send")) {
         // default-resolution behavior is preserved — if no session is available
         // we send `undefined` and let the server surface any missing-session
         // error rather than silently dropping the send.
+        //
+        // M2 (v5.0/P6 review): api_key / none-mode callers MUST set
+        // CHATLYTICS_SESSION (or pass a per-call `session`). Unlike the old
+        // /api/v1/actions dispatcher — which default-resolved the session
+        // server-side — /api/v1/send REQUIRES a session, so a no-session api_key
+        // call returns an actionable 400 ({error:"...session..."}) which callApi
+        // surfaces verbatim to the LLM (NOT silently dropped). We intentionally do
+        // NOT add a client-side hard error here: the server's 400 is the single
+        // source of truth and stays actionable. Bot-token callers are UNAFFECTED —
+        // the server pins the session to the bot's own, so `session` is optional.
         const chatId = await resolveChatId(to);
         const result = await callApi("POST", "/api/v1/send", {
           chatId,
