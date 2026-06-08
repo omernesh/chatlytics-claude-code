@@ -162,6 +162,37 @@ if (botIdentity) {
   console.error(`[chatlytics-mcp] Bot identity: ${name} (fp=${fp})`);
 }
 
+// v5.0/P10 — fetch the bot's paired entities for login identity surface.
+// GET /api/v1/bot/me/pairings does NOT exist as a /me-scoped route (confirmed:
+// only /api/v1/bots/:token/pairings exists on admin routes). This helper is
+// wired in for future-proofing; it will fail-OPEN (return null) until the
+// server exposes a bot-self pairings endpoint. Fail-OPEN contract:
+//   - 404 → endpoint not yet implemented, skip silently
+//   - any non-2xx or network error → warn to stderr, return null
+//   - token NEVER logged (INV-02)
+async function fetchBotPairings() {
+  if (AUTH_MODE !== "bot_token") return null;
+  try {
+    const res = await fetch(`${API_URL}/api/v1/bot/me/pairings`, {
+      headers: { Authorization: `Bearer ${BOT_TOKEN}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (res.status === 404) {
+      // Endpoint not yet implemented server-side — expected, skip silently.
+      return null;
+    }
+    if (!res.ok) {
+      console.error(`[chatlytics-mcp] /bot/me/pairings returned ${res.status} — skipping pairings (fail-open)`);
+      return null;
+    }
+    const data = await res.json();
+    return data;
+  } catch (e) {
+    console.error(`[chatlytics-mcp] /bot/me/pairings fetch failed: ${e.message} — skipping pairings (fail-open)`);
+    return null;
+  }
+}
+
 // v4.0 CC-V2-02 (Phase 337) — long-poll inbound knobs. Clamped client-side
 // to MAX so callers never send a value the server would clip anyway.
 const DEFAULT_LONGPOLL_TIMEOUT_MS = 25_000;
@@ -424,10 +455,16 @@ if (allow("chatlytics_health")) {
 // or fail-open is active, allowed===null so allow() also returns true.
 // Therefore this tool is effectively unconditionally registered. The wrap
 // is kept for symmetry + future-proofing.
+//
+// v5.0/P10 identity enrichment: in bot_token mode, after the health check,
+// fetches GET /api/v1/bot/me (reuses botIdentity from boot when available)
+// and GET /api/v1/bot/me/pairings (fail-open — 404 expected until server
+// adds the route). The agent sees: display_name, session_id, fp, is_default,
+// and a short pairing summary. INV-02: raw bot token NEVER emitted.
 if (allow("chatlytics_login")) {
   server.tool(
     "chatlytics_login",
-    "Validate the Chatlytics API key + connection. Run this once after install to verify setup. Returns a clear pass/fail with troubleshooting hints.",
+    "Validate the Chatlytics API key + connection. Run this once after install to verify setup. Returns a clear pass/fail with troubleshooting hints. In bot-token mode also surfaces the bot's identity (name, session, paired entities).",
     {},
     async () => {
       if (!AUTH_VALUE) {
@@ -461,13 +498,73 @@ if (allow("chatlytics_login")) {
             ],
           };
         }
+
+        // v5.0/P10 — bot identity + pairings enrichment (bot_token mode only).
+        // Both calls are fail-OPEN: errors/missing data are tolerated and the
+        // login still succeeds. INV-02: the raw bot token is NEVER included in
+        // any returned text — only the server-supplied fingerprint (fp).
+        let identityLines = "";
+        if (AUTH_MODE === "bot_token") {
+          // Re-fetch /bot/me at call time so the agent always sees fresh data
+          // (the boot-time botIdentity may be stale after a bot reconfigure).
+          let me = null;
+          try {
+            const meRes = await fetch(`${API_URL}/api/v1/bot/me`, {
+              headers: { Authorization: `Bearer ${BOT_TOKEN}` },
+              signal: AbortSignal.timeout(10_000),
+            });
+            if (meRes.ok) me = await meRes.json();
+          } catch (_) {
+            // fail-open — identity block simply omitted
+          }
+
+          // Fetch pairings — fail-open; 404 is normal (endpoint not yet live).
+          const pairingsData = await fetchBotPairings();
+
+          if (me) {
+            // INV-02: only emit fields the SERVER returned; fp is server-derived.
+            // Never interpolate BOT_TOKEN — not even as a substring check here.
+            const displayName = me.display_name || "(unnamed bot)";
+            const sessionId = me.session_id || "unknown";
+            const fp = me.bot_token_fp || "unknown";
+            const isDefault = me.is_default === true ? "yes" : (me.is_default === false ? "no" : "unknown");
+
+            identityLines += `\nBot: ${displayName} (fp=${fp})`;
+            identityLines += `\nSession: ${sessionId}`;
+            identityLines += `\nDefault bot: ${isDefault}`;
+          }
+
+          if (pairingsData) {
+            const pairings = Array.isArray(pairingsData?.pairings)
+              ? pairingsData.pairings
+              : Array.isArray(pairingsData)
+                ? pairingsData
+                : [];
+            if (pairings.length > 0) {
+              const preview = pairings
+                .slice(0, 5)
+                .map((p) => {
+                  const jid = p?.entity_jid || p?.jid || p?.chatId || "?";
+                  const type = p?.entity_type || p?.type || "";
+                  return type ? `${jid} [${type}]` : jid;
+                })
+                .join(", ");
+              const more = pairings.length > 5 ? ` (+${pairings.length - 5} more)` : "";
+              identityLines += `\nPaired entities (${pairings.length}): ${preview}${more}`;
+            } else {
+              identityLines += `\nPaired entities: none`;
+            }
+          }
+        }
+
         return {
           content: [
             {
               type: "text",
               text:
                 `✅ Connected to Chatlytics at ${API_URL} (auth mode: ${AUTH_MODE}). ` +
-                `Webhook registered. Sessions: ${sessions}.`,
+                `Webhook registered. Sessions: ${sessions}.` +
+                identityLines,
             },
           ],
         };

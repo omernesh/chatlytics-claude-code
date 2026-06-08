@@ -113,13 +113,18 @@ function makeMockServer({
   actionsStatus = 200,
   patchBotMeResponse = null,
   patchBotMeStatus = 200,
+  // v5.0/P10 additions
+  pairingsResponse = null,
+  pairingsStatus = 404,  // default 404 = endpoint not yet live (fail-open)
 }) {
   // toolsResponse: object to return as JSON for GET /api/v1/bot/me/tools
-  //   null + toolsStatus 200 → return { tools: [...9 default tools...] }
+  //   null + toolsStatus 200 → return { tools: [...10 default tools...] }
   // toolsStatus: HTTP status for /bot/me/tools
   // botMeResponse: body for GET /api/v1/bot/me (Phase 337); null → default identity
   // updatesResponse: body for GET /api/v1/bot/updates (Phase 337); null → default
   // ackResponse: body for POST /api/v1/bot/updates/ack (Phase 337); default {acked:1}
+  // pairingsResponse: body for GET /api/v1/bot/me/pairings (v5.0/P10); null → default
+  // pairingsStatus: HTTP status for /bot/me/pairings (default 404 = not yet live)
   return new Promise((res) => {
     const server = createServer((req, response) => {
       const chunks = [];
@@ -156,6 +161,29 @@ function makeMockServer({
               { name: "chatlytics_dispatch", description: "x" },
               { name: "chatlytics_poll", description: "x" },
               { name: "chatlytics_configure", description: "x" },
+            ],
+          };
+          response.end(JSON.stringify(body));
+          return;
+        }
+
+        // /api/v1/bot/me/pairings — bot self-pairings (v5.0/P10)
+        // Must be checked BEFORE the bare /bot/me handler (longer path wins).
+        if (pathOnly === "/api/v1/bot/me/pairings" && req.method === "GET") {
+          response.statusCode = pairingsStatus;
+          response.setHeader("Content-Type", "application/json");
+          if (pairingsStatus === 404) {
+            response.end(JSON.stringify({ error: "not_found" }));
+            return;
+          }
+          if (pairingsStatus !== 200) {
+            response.end(JSON.stringify({ error: "mock_failure" }));
+            return;
+          }
+          const body = pairingsResponse ?? {
+            pairings: [
+              { entity_jid: "120363421825201386@g.us", entity_type: "group" },
+              { entity_jid: "972544329000@c.us", entity_type: "contact" },
             ],
           };
           response.end(JSON.stringify(body));
@@ -906,6 +934,127 @@ async function assertConfigureRejectsApiKeyMode() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Phase 5 — v5.0/P10 assertions: chatlytics_login identity enrichment.
+// ---------------------------------------------------------------------------
+
+// --- Assertion 13: chatlytics_login (bot mode) surfaces identity + pairings ---
+async function assertLoginSurfacesBotIdentity() {
+  const captureLog = [];
+  const { server, port } = await makeMockServer({
+    captureLog,
+    botMeResponse: {
+      bot_id: 3,
+      display_name: "Sammie",
+      bot_token_fp: "cafebabe",
+      session_id: "3cf11776_logan",
+      is_default: true,
+    },
+    pairingsStatus: 200,
+    pairingsResponse: {
+      pairings: [
+        { entity_jid: "120363421825201386@g.us", entity_type: "group" },
+        { entity_jid: "972544329000@c.us", entity_type: "contact" },
+      ],
+    },
+  });
+  const BOT_TOKEN = "sk_bot_LOGIN_IDENTITY_TOKEN_42";
+
+  try {
+    const result = await driveBundle({
+      env: {
+        CHATLYTICS_API_URL: `http://127.0.0.1:${port}`,
+        CHATLYTICS_BOT_TOKEN: BOT_TOKEN,
+      },
+      customToolCall: { name: "chatlytics_login", arguments: {} },
+      postCallWaitMs: 1500,
+    });
+
+    // Verify /bot/me was called (at-call-time re-fetch)
+    const meReqs = captureLog.filter((r) => r.path === "/api/v1/bot/me" && r.method === "GET");
+    if (meReqs.length === 0) fail("login-identity: GET /api/v1/bot/me was not called");
+    // The at-call-time fetch must carry Bearer
+    const loginMeReq = meReqs[meReqs.length - 1]; // last one is the chatlytics_login call
+    if (loginMeReq.authorization !== `Bearer ${BOT_TOKEN}`) {
+      fail(`login-identity: /bot/me Authorization expected 'Bearer ${BOT_TOKEN}', got '${loginMeReq.authorization}'`);
+    }
+
+    // Verify /bot/me/pairings was called
+    const pairingsReq = captureLog.find((r) => r.path === "/api/v1/bot/me/pairings" && r.method === "GET");
+    if (!pairingsReq) fail("login-identity: GET /api/v1/bot/me/pairings was not called");
+    if (pairingsReq.authorization !== `Bearer ${BOT_TOKEN}`) {
+      fail(`login-identity: /bot/me/pairings Authorization expected 'Bearer ${BOT_TOKEN}', got '${pairingsReq.authorization}'`);
+    }
+
+    // Verify tool response content
+    const callResp = parseToolCallResponse(result.stdout);
+    if (!callResp || callResp.result?.isError) {
+      fail(`login-identity: tool response errored or missing. resp=${JSON.stringify(callResp).slice(0, 600)}`);
+    }
+    const text = callResp.result?.content?.[0]?.text || "";
+
+    if (!text.includes("Sammie")) fail(`login-identity: response missing display_name 'Sammie'. text=${text.slice(0, 600)}`);
+    if (!text.includes("cafebabe")) fail(`login-identity: response missing fp 'cafebabe'. text=${text.slice(0, 600)}`);
+    if (!text.includes("3cf11776_logan")) fail(`login-identity: response missing session_id. text=${text.slice(0, 600)}`);
+    if (!text.includes("yes")) fail(`login-identity: response missing is_default:yes. text=${text.slice(0, 600)}`);
+    if (!text.includes("120363421825201386@g.us")) fail(`login-identity: response missing group pairing JID. text=${text.slice(0, 600)}`);
+    if (!text.includes("972544329000@c.us")) fail(`login-identity: response missing contact pairing JID. text=${text.slice(0, 600)}`);
+    // INV-02: raw token MUST NOT appear in the tool response text
+    if (text.includes(BOT_TOKEN)) fail("login-identity: INV-02 violation — raw BOT_TOKEN appeared in tool response text");
+
+    ok("v5.0/P10: chatlytics_login (bot mode) surfaces display_name + session_id + fp + is_default + pairings");
+  } finally {
+    server.close();
+  }
+}
+
+// --- Assertion 14: chatlytics_login with pairings 404 still succeeds (fail-open) ---
+async function assertLoginPairings404FailOpen() {
+  const captureLog = [];
+  const { server, port } = await makeMockServer({
+    captureLog,
+    botMeResponse: {
+      bot_id: 5,
+      display_name: "TestBot",
+      bot_token_fp: "feedface",
+      session_id: "test_sess",
+      is_default: false,
+    },
+    // Default pairingsStatus = 404 — simulates endpoint not yet implemented
+  });
+  const BOT_TOKEN = "sk_bot_PAIRINGS_FAILOPEN_TOKEN_99";
+
+  try {
+    const result = await driveBundle({
+      env: {
+        CHATLYTICS_API_URL: `http://127.0.0.1:${port}`,
+        CHATLYTICS_BOT_TOKEN: BOT_TOKEN,
+      },
+      customToolCall: { name: "chatlytics_login", arguments: {} },
+      postCallWaitMs: 1500,
+    });
+
+    const callResp = parseToolCallResponse(result.stdout);
+    if (!callResp || callResp.result?.isError) {
+      fail(`login-pairings-failopen: tool response errored (should succeed even on 404 pairings). resp=${JSON.stringify(callResp).slice(0, 600)}`);
+    }
+    const text = callResp.result?.content?.[0]?.text || "";
+    // Identity still surfaces even when pairings 404
+    if (!text.includes("TestBot")) fail(`login-pairings-failopen: display_name missing. text=${text.slice(0, 600)}`);
+    if (!text.includes("feedface")) fail(`login-pairings-failopen: fp missing. text=${text.slice(0, 600)}`);
+    // No pairings section when 404 (endpoint not live)
+    if (text.includes("Paired entities")) fail(`login-pairings-failopen: 'Paired entities' should NOT appear on 404. text=${text.slice(0, 600)}`);
+    // No error from the pairings failure
+    if (text.includes("❌")) fail(`login-pairings-failopen: login returned error indicator (should be success). text=${text.slice(0, 600)}`);
+    // INV-02
+    if (text.includes(BOT_TOKEN)) fail("login-pairings-failopen: INV-02 violation — raw BOT_TOKEN in tool response");
+
+    ok("v5.0/P10: chatlytics_login pairings 404 → fail-open (identity surfaces, no pairings section, no error)");
+  } finally {
+    server.close();
+  }
+}
+
 (async () => {
   await liveModeCheck();
   await assertEnvVarPrecedence();
@@ -920,7 +1069,9 @@ async function assertConfigureRejectsApiKeyMode() {
   await assertSendApiKeyNoSessionSurfacesError();
   await assertConfigureTranslatesBody();
   await assertConfigureRejectsApiKeyMode();
-  console.log("[smoke] PASS — 12 bundle-behavior assertions green");
+  await assertLoginSurfacesBotIdentity();
+  await assertLoginPairings404FailOpen();
+  console.log("[smoke] PASS — 14 bundle-behavior assertions green");
   process.exit(0);
 })().catch((e) => {
   fail(`unhandled error: ${e?.stack || e}`);

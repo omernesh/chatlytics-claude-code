@@ -21117,6 +21117,27 @@ if (botIdentity) {
   const fp = botIdentity.bot_token_fp || "unknown";
   console.error(`[chatlytics-mcp] Bot identity: ${name} (fp=${fp})`);
 }
+async function fetchBotPairings() {
+  if (AUTH_MODE !== "bot_token") return null;
+  try {
+    const res = await fetch(`${API_URL}/api/v1/bot/me/pairings`, {
+      headers: { Authorization: `Bearer ${BOT_TOKEN}` },
+      signal: AbortSignal.timeout(1e4)
+    });
+    if (res.status === 404) {
+      return null;
+    }
+    if (!res.ok) {
+      console.error(`[chatlytics-mcp] /bot/me/pairings returned ${res.status} \u2014 skipping pairings (fail-open)`);
+      return null;
+    }
+    const data = await res.json();
+    return data;
+  } catch (e) {
+    console.error(`[chatlytics-mcp] /bot/me/pairings fetch failed: ${e.message} \u2014 skipping pairings (fail-open)`);
+    return null;
+  }
+}
 var DEFAULT_LONGPOLL_TIMEOUT_MS = 25e3;
 var MAX_LONGPOLL_TIMEOUT_MS = 6e4;
 var MIN_LONGPOLL_TIMEOUT_MS = 1e3;
@@ -21306,7 +21327,7 @@ if (allow("chatlytics_health")) {
 if (allow("chatlytics_login")) {
   server.tool(
     "chatlytics_login",
-    "Validate the Chatlytics API key + connection. Run this once after install to verify setup. Returns a clear pass/fail with troubleshooting hints.",
+    "Validate the Chatlytics API key + connection. Run this once after install to verify setup. Returns a clear pass/fail with troubleshooting hints. In bot-token mode also surfaces the bot's identity (name, session, paired entities).",
     {},
     async () => {
       if (!AUTH_VALUE) {
@@ -21330,11 +21351,52 @@ if (allow("chatlytics_login")) {
             ]
           };
         }
+        let identityLines = "";
+        if (AUTH_MODE === "bot_token") {
+          let me = null;
+          try {
+            const meRes = await fetch(`${API_URL}/api/v1/bot/me`, {
+              headers: { Authorization: `Bearer ${BOT_TOKEN}` },
+              signal: AbortSignal.timeout(1e4)
+            });
+            if (meRes.ok) me = await meRes.json();
+          } catch (_) {
+          }
+          const pairingsData = await fetchBotPairings();
+          if (me) {
+            const displayName = me.display_name || "(unnamed bot)";
+            const sessionId = me.session_id || "unknown";
+            const fp = me.bot_token_fp || "unknown";
+            const isDefault = me.is_default === true ? "yes" : me.is_default === false ? "no" : "unknown";
+            identityLines += `
+Bot: ${displayName} (fp=${fp})`;
+            identityLines += `
+Session: ${sessionId}`;
+            identityLines += `
+Default bot: ${isDefault}`;
+          }
+          if (pairingsData) {
+            const pairings = Array.isArray(pairingsData?.pairings) ? pairingsData.pairings : Array.isArray(pairingsData) ? pairingsData : [];
+            if (pairings.length > 0) {
+              const preview = pairings.slice(0, 5).map((p) => {
+                const jid = p?.entity_jid || p?.jid || p?.chatId || "?";
+                const type = p?.entity_type || p?.type || "";
+                return type ? `${jid} [${type}]` : jid;
+              }).join(", ");
+              const more = pairings.length > 5 ? ` (+${pairings.length - 5} more)` : "";
+              identityLines += `
+Paired entities (${pairings.length}): ${preview}${more}`;
+            } else {
+              identityLines += `
+Paired entities: none`;
+            }
+          }
+        }
         return {
           content: [
             {
               type: "text",
-              text: `\u2705 Connected to Chatlytics at ${API_URL} (auth mode: ${AUTH_MODE}). Webhook registered. Sessions: ${sessions}.`
+              text: `\u2705 Connected to Chatlytics at ${API_URL} (auth mode: ${AUTH_MODE}). Webhook registered. Sessions: ${sessions}.` + identityLines
             }
           ]
         };
