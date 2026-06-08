@@ -21085,7 +21085,7 @@ async function fetchAllowedTools() {
 var allowed = await fetchAllowedTools();
 var allow = (name) => allowed === null || allowed.has(name);
 if (allowed !== null) {
-  console.error(`[chatlytics-mcp] Filtered tool catalog: ${allowed.size}/9 tools allowed (${[...allowed].join(", ")})`);
+  console.error(`[chatlytics-mcp] Filtered tool catalog: ${allowed.size}/10 tools allowed (${[...allowed].join(", ")})`);
 }
 async function fetchBotIdentity() {
   if (AUTH_MODE !== "bot_token") return null;
@@ -21181,18 +21181,10 @@ if (allow("chatlytics_send")) {
         return { isError: true, content: [{ type: "text", text: NO_TOKEN_PROMPT }] };
       }
       try {
-        if (AUTH_MODE === "bot_token") {
-          const chatId = await resolveChatId(to);
-          const result2 = await callApi("POST", "/api/v1/send", {
-            chatId,
-            text,
-            session: session || DEFAULT_SESSION || void 0
-          });
-          return { content: [{ type: "text", text: JSON.stringify(result2, null, 2) }] };
-        }
-        const result = await callApi("POST", "/api/v1/actions", {
-          action: "send",
-          params: { chatId: to, text },
+        const chatId = await resolveChatId(to);
+        const result = await callApi("POST", "/api/v1/send", {
+          chatId,
+          text,
           session: session || DEFAULT_SESSION || void 0
         });
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
@@ -21488,6 +21480,96 @@ if (allow("chatlytics_poll")) {
           isError: true,
           content: [{ type: "text", text: `chatlytics_poll network error: ${e.message}` }]
         };
+      }
+    }
+  );
+}
+if (allow("chatlytics_configure")) {
+  server.tool(
+    "chatlytics_configure",
+    "Self-configure THIS bot's own presentation and behavior: display name, trigger words/operator, message prefix/suffix, keyword filter, and DM/group access allow-lists. Drives PATCH /api/v1/bot/me. Requires CHATLYTICS_BOT_TOKEN (sk_bot_*). Identity and permissions (session, account, default-bot status, permission scope, the token) CANNOT be changed here \u2014 those are administrative and are rejected by the server. Only the fields you pass are updated; omit a field to leave it unchanged. Access policies are always allow-lists.",
+    {
+      display_name: external_exports.string().min(1).max(128).optional().describe("New display name for the bot (1..128 chars)."),
+      trigger: external_exports.object({
+        word: external_exports.string().optional().describe("Single trigger word the bot listens for (e.g. '!sammie')."),
+        operator: external_exports.string().optional().describe("Trigger operator (e.g. 'contains', 'startswith')."),
+        require_both: external_exports.boolean().optional().describe("Require both the trigger word AND a mention/condition.")
+      }).optional().describe("Trigger configuration. Pass `word` to set the (single) trigger word."),
+      prefix: external_exports.string().optional().describe("Text prepended to every outbound message (message-prefix module)."),
+      suffix: external_exports.string().optional().describe("Text appended to every outbound message (message-suffix module)."),
+      keyword_filter: external_exports.object({
+        keywords: external_exports.array(external_exports.string()).optional().describe("Keywords the bot reacts to."),
+        scope: external_exports.array(external_exports.enum(["dm", "group"])).optional().describe("Where the filter applies: 'dm' and/or 'group'.")
+      }).optional().describe("Keyword-filter module config."),
+      access_policy: external_exports.object({
+        dm: external_exports.object({ entries: external_exports.array(external_exports.string()) }).optional().describe("DM allow-list JIDs/numbers."),
+        group: external_exports.object({ entries: external_exports.array(external_exports.string()) }).optional().describe("Group allow-list JIDs.")
+      }).optional().describe("Access policy. Always an allow-list (the server rejects allow_all).")
+    },
+    async ({ display_name, trigger, prefix, suffix, keyword_filter, access_policy }) => {
+      if (AUTH_MODE === "none") {
+        return { isError: true, content: [{ type: "text", text: NO_TOKEN_PROMPT }] };
+      }
+      if (AUTH_MODE !== "bot_token") {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `chatlytics_configure requires CHATLYTICS_BOT_TOKEN (sk_bot_*) \u2014 bot self-config is bot-scoped (PATCH /api/v1/bot/me). The legacy CHATLYTICS_API_KEY operator bearer cannot drive this endpoint. Provision a bot token at https://app.chatlytics.ai \u2192 Bots, then add CHATLYTICS_BOT_TOKEN to your .claude/settings.json env block and restart Claude Code.`
+            }
+          ]
+        };
+      }
+      const body = {};
+      if (display_name !== void 0) body.display_name = display_name;
+      if (trigger !== void 0) {
+        const tc = {};
+        if (trigger.word !== void 0) tc.trigger_words = [trigger.word];
+        if (trigger.operator !== void 0) tc.trigger_operator = trigger.operator;
+        if (trigger.require_both !== void 0) tc.require_both = trigger.require_both;
+        if (Object.keys(tc).length > 0) body.trigger_config = tc;
+      }
+      const modules = {};
+      if (prefix !== void 0) {
+        modules["message-prefix"] = { config: { prefix } };
+      }
+      if (suffix !== void 0) {
+        modules["message-suffix"] = { config: { suffix } };
+      }
+      if (keyword_filter !== void 0) {
+        const cfg = {};
+        if (keyword_filter.keywords !== void 0) cfg.keywords = keyword_filter.keywords;
+        if (keyword_filter.scope !== void 0) cfg.scope = keyword_filter.scope;
+        if (Object.keys(cfg).length > 0) modules["keyword-filter"] = { config: cfg };
+      }
+      if (access_policy !== void 0) {
+        const cfg = {};
+        if (access_policy.dm !== void 0) {
+          cfg.dm = { type: "allow_list", entries: access_policy.dm.entries };
+        }
+        if (access_policy.group !== void 0) {
+          cfg.group = { type: "allow_list", entries: access_policy.group.entries };
+        }
+        if (Object.keys(cfg).length > 0) modules["access-policy"] = { config: cfg };
+      }
+      if (Object.keys(modules).length > 0) body.modules = modules;
+      if (Object.keys(body).length === 0) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: "chatlytics_configure: nothing to update \u2014 pass at least one of display_name, trigger, prefix, suffix, keyword_filter, or access_policy."
+            }
+          ]
+        };
+      }
+      try {
+        const result = await callApi("PATCH", "/api/v1/bot/me", body);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      } catch (e) {
+        return { isError: true, content: [{ type: "text", text: e.message }] };
       }
     }
   );

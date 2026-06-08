@@ -106,6 +106,13 @@ function makeMockServer({
   updatesStatus = 200,
   ackResponse = { acked: 1, cursor: "advanced" },
   ackStatus = 200,
+  // v5.0/P6 additions
+  sendResponse = { ok: true, id: "msg_mock_1" },
+  sendStatus = 200,
+  actionsResponse = null,
+  actionsStatus = 200,
+  patchBotMeResponse = null,
+  patchBotMeStatus = 200,
 }) {
   // toolsResponse: object to return as JSON for GET /api/v1/bot/me/tools
   //   null + toolsStatus 200 → return { tools: [...9 default tools...] }
@@ -148,6 +155,7 @@ function makeMockServer({
               { name: "chatlytics_login", description: "x" },
               { name: "chatlytics_dispatch", description: "x" },
               { name: "chatlytics_poll", description: "x" },
+              { name: "chatlytics_configure", description: "x" },
             ],
           };
           response.end(JSON.stringify(body));
@@ -190,6 +198,43 @@ function makeMockServer({
           response.statusCode = ackStatus;
           response.setHeader("Content-Type", "application/json");
           response.end(JSON.stringify(ackResponse));
+          return;
+        }
+
+        // /api/v1/bot/me PATCH — self-config (v5.0/P6 chatlytics_configure)
+        if (pathOnly === "/api/v1/bot/me" && req.method === "PATCH") {
+          response.statusCode = patchBotMeStatus;
+          response.setHeader("Content-Type", "application/json");
+          if (patchBotMeStatus !== 200) {
+            response.end(JSON.stringify({ error: "mock_failure" }));
+            return;
+          }
+          const body = patchBotMeResponse ?? {
+            bot_id: 1,
+            display_name: "Configured Mock Bot",
+            bot_token_fp: "deadbeef",
+          };
+          response.end(JSON.stringify(body));
+          return;
+        }
+
+        // /api/v1/send POST — unified send route (v5.0/P6)
+        if (pathOnly === "/api/v1/send" && req.method === "POST") {
+          response.statusCode = sendStatus;
+          response.setHeader("Content-Type", "application/json");
+          response.end(JSON.stringify(sendResponse));
+          return;
+        }
+
+        // /api/v1/actions POST — search (resolveChatId) + legacy dispatch
+        if (pathOnly === "/api/v1/actions" && req.method === "POST") {
+          response.statusCode = actionsStatus;
+          response.setHeader("Content-Type", "application/json");
+          // Default: a single search match so resolveChatId resolves cleanly.
+          const body = actionsResponse ?? {
+            contacts: [{ chatId: "972500000000@c.us", name: "Mock Contact", type: "contact" }],
+          };
+          response.end(JSON.stringify(body));
           return;
         }
 
@@ -408,11 +453,11 @@ async function assertFailOpenOnCatalogOutage() {
     }
     const toolNames = parseToolsList(result.stdout);
     if (!toolNames) fail(`fail-open: tools/list response not found in stdout. stdout=${result.stdout.slice(0, 600)}`);
-    // Phase 337: tool count bumped 8 → 9 (chatlytics_poll added).
-    if (toolNames.length !== 9) {
-      fail(`fail-open: tools/list returned ${toolNames.length} tools, expected 9. names=${JSON.stringify(toolNames)}`);
+    // Phase 337: 8 → 9 (chatlytics_poll). v5.0/P6: 9 → 10 (chatlytics_configure).
+    if (toolNames.length !== 10) {
+      fail(`fail-open: tools/list returned ${toolNames.length} tools, expected 10. names=${JSON.stringify(toolNames)}`);
     }
-    ok(`fail-OPEN: /bot/me/tools 503 → 9 tools registered (${toolNames.join(", ")})`);
+    ok(`fail-OPEN: /bot/me/tools 503 → 10 tools registered (${toolNames.join(", ")})`);
   } finally {
     server.close();
   }
@@ -629,6 +674,181 @@ async function assertPollRejectsApiKeyMode() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Phase 4 — v5.0/P6 assertions: unified /api/v1/send + chatlytics_configure.
+// ---------------------------------------------------------------------------
+
+// --- Assertion 9: chatlytics_send in api_key mode targets /api/v1/send (NOT /actions) ---
+async function assertSendUnifiedApiKeyMode() {
+  const captureLog = [];
+  const { server, port } = await makeMockServer({ captureLog });
+  const API_KEY = "legacy_api_key_send_42";
+
+  try {
+    const result = await driveBundle({
+      env: {
+        CHATLYTICS_API_URL: `http://127.0.0.1:${port}`,
+        CHATLYTICS_BOT_TOKEN: "",
+        CHATLYTICS_API_KEY: API_KEY,
+        CHATLYTICS_SESSION: "sess_default",
+      },
+      customToolCall: {
+        name: "chatlytics_send",
+        // JID input so resolveChatId returns immediately (no /actions search hop).
+        arguments: { to: "972544329000@c.us", text: "hello unified" },
+      },
+      postCallWaitMs: 1200,
+    });
+    const sendReq = captureLog.find((r) => r.path === "/api/v1/send" && r.method === "POST");
+    if (!sendReq) {
+      fail(`send-unified: POST /api/v1/send was not called. capture=${JSON.stringify(captureLog.map(c => `${c.method} ${c.url}`))}`);
+    }
+    // In api_key mode, /api/v1/actions must NOT carry a send action.
+    const actionsSend = captureLog.find(
+      (r) => r.path === "/api/v1/actions" && r.method === "POST" && r.body.includes('"send"')
+    );
+    if (actionsSend) {
+      fail(`send-unified: api_key send incorrectly hit /api/v1/actions with a send action. body=${actionsSend.body.slice(0, 200)}`);
+    }
+    if (sendReq.authorization !== `Bearer ${API_KEY}`) {
+      fail(`send-unified: /api/v1/send Authorization expected 'Bearer ${API_KEY}', got '${sendReq.authorization}'`);
+    }
+    let parsed;
+    try { parsed = JSON.parse(sendReq.body); } catch { fail(`send-unified: /send body not JSON. raw=${sendReq.body}`); }
+    if (parsed.chatId !== "972544329000@c.us") {
+      fail(`send-unified: /send body chatId expected '972544329000@c.us', got '${parsed.chatId}'`);
+    }
+    if (parsed.text !== "hello unified") {
+      fail(`send-unified: /send body text expected 'hello unified', got '${parsed.text}'`);
+    }
+    if (parsed.session !== "sess_default") {
+      fail(`send-unified: /send body session expected 'sess_default' (DEFAULT_SESSION), got '${parsed.session}'`);
+    }
+    const callResp = parseToolCallResponse(result.stdout);
+    if (!callResp || callResp.result?.isError) {
+      fail(`send-unified: tool response errored. resp=${JSON.stringify(callResp).slice(0, 400)}`);
+    }
+    ok("v5.0/P6: chatlytics_send (api_key mode) → POST /api/v1/send, NOT /api/v1/actions");
+  } finally {
+    server.close();
+  }
+}
+
+// --- Assertion 10: chatlytics_configure (bot mode) → PATCH /bot/me with translated body ---
+async function assertConfigureTranslatesBody() {
+  const captureLog = [];
+  const { server, port } = await makeMockServer({ captureLog });
+  const BOT_TOKEN = "sk_bot_CONFIGURE_TOKEN_42";
+
+  try {
+    const result = await driveBundle({
+      env: {
+        CHATLYTICS_API_URL: `http://127.0.0.1:${port}`,
+        CHATLYTICS_BOT_TOKEN: BOT_TOKEN,
+      },
+      customToolCall: {
+        name: "chatlytics_configure",
+        arguments: {
+          display_name: "New Name",
+          trigger: { word: "!bot", operator: "startswith", require_both: true },
+          prefix: "[bot] ",
+          suffix: " — sent by bot",
+          keyword_filter: { keywords: ["urgent"], scope: ["group"] },
+          access_policy: { dm: { entries: ["111@c.us"] }, group: { entries: ["g1@g.us"] } },
+        },
+      },
+      postCallWaitMs: 1200,
+    });
+    const patchReq = captureLog.find((r) => r.path === "/api/v1/bot/me" && r.method === "PATCH");
+    if (!patchReq) {
+      fail(`configure: PATCH /api/v1/bot/me was not called. capture=${JSON.stringify(captureLog.map(c => `${c.method} ${c.url}`))}`);
+    }
+    if (patchReq.authorization !== `Bearer ${BOT_TOKEN}`) {
+      fail(`configure: PATCH Authorization expected 'Bearer ${BOT_TOKEN}', got '${patchReq.authorization}'`);
+    }
+    let b;
+    try { b = JSON.parse(patchReq.body); } catch { fail(`configure: PATCH body not JSON. raw=${patchReq.body}`); }
+
+    if (b.display_name !== "New Name") fail(`configure: display_name not translated. body=${patchReq.body}`);
+    // trigger.word → trigger_config.trigger_words:[word]
+    if (!b.trigger_config || JSON.stringify(b.trigger_config.trigger_words) !== JSON.stringify(["!bot"])) {
+      fail(`configure: trigger.word → trigger_words:['!bot'] failed. trigger_config=${JSON.stringify(b.trigger_config)}`);
+    }
+    if (b.trigger_config.trigger_operator !== "startswith") fail(`configure: trigger_operator not translated`);
+    if (b.trigger_config.require_both !== true) fail(`configure: require_both not translated`);
+    // prefix / suffix modules
+    if (b.modules?.["message-prefix"]?.config?.prefix !== "[bot] ") fail(`configure: prefix module mistranslated. modules=${JSON.stringify(b.modules)}`);
+    if (b.modules?.["message-suffix"]?.config?.suffix !== " — sent by bot") fail(`configure: suffix module mistranslated`);
+    // keyword-filter
+    if (JSON.stringify(b.modules?.["keyword-filter"]?.config) !== JSON.stringify({ keywords: ["urgent"], scope: ["group"] })) {
+      fail(`configure: keyword-filter mistranslated. got=${JSON.stringify(b.modules?.["keyword-filter"]?.config)}`);
+    }
+    // access-policy MUST be allow_list, never allow_all
+    const ap = b.modules?.["access-policy"]?.config;
+    if (!ap || ap.dm?.type !== "allow_list" || JSON.stringify(ap.dm?.entries) !== JSON.stringify(["111@c.us"])) {
+      fail(`configure: access-policy dm not allow_list. got=${JSON.stringify(ap)}`);
+    }
+    if (ap.group?.type !== "allow_list" || JSON.stringify(ap.group?.entries) !== JSON.stringify(["g1@g.us"])) {
+      fail(`configure: access-policy group not allow_list. got=${JSON.stringify(ap)}`);
+    }
+    if (patchReq.body.includes("allow_all")) {
+      fail(`configure: allow_all MUST NEVER be sent. body=${patchReq.body}`);
+    }
+    // No identity/authority fields leaked
+    for (const forbidden of ["session", "account", "is_default", "permission_scope", "bot_token", "token"]) {
+      if (Object.prototype.hasOwnProperty.call(b, forbidden)) {
+        fail(`configure: forbidden identity field '${forbidden}' present in PATCH body. body=${patchReq.body}`);
+      }
+    }
+    const callResp = parseToolCallResponse(result.stdout);
+    if (!callResp || callResp.result?.isError) {
+      fail(`configure: tool response errored. resp=${JSON.stringify(callResp).slice(0, 400)}`);
+    }
+    ok("v5.0/P6: chatlytics_configure (bot mode) → PATCH /bot/me with friendly→wire translation (allow_list only, no identity fields)");
+  } finally {
+    server.close();
+  }
+}
+
+// --- Assertion 11: chatlytics_configure rejects api_key-only mode (no API call) ---
+async function assertConfigureRejectsApiKeyMode() {
+  const captureLog = [];
+  const { server, port } = await makeMockServer({ captureLog });
+  const API_KEY = "legacy_api_key_configure_42";
+
+  try {
+    const result = await driveBundle({
+      env: {
+        CHATLYTICS_API_URL: `http://127.0.0.1:${port}`,
+        CHATLYTICS_BOT_TOKEN: "",
+        CHATLYTICS_API_KEY: API_KEY,
+      },
+      customToolCall: {
+        name: "chatlytics_configure",
+        arguments: { display_name: "Should Not Apply" },
+      },
+      postCallWaitMs: 800,
+    });
+    // PATCH /bot/me MUST NOT be called in api_key mode.
+    const patchReq = captureLog.find((r) => r.path === "/api/v1/bot/me" && r.method === "PATCH");
+    if (patchReq) {
+      fail(`configure-rejects-apikey: PATCH /bot/me should NOT be called in api_key mode (got ${JSON.stringify(patchReq)})`);
+    }
+    const callResp = parseToolCallResponse(result.stdout);
+    if (!callResp) fail(`configure-rejects-apikey: tools/call response not found. stdout=${result.stdout.slice(0, 600)}`);
+    if (callResp.result?.isError !== true) {
+      fail(`configure-rejects-apikey: response missing isError:true. resp=${JSON.stringify(callResp).slice(0, 400)}`);
+    }
+    const text = callResp.result?.content?.[0]?.text || "";
+    if (!text.includes("requires CHATLYTICS_BOT_TOKEN")) {
+      fail(`configure-rejects-apikey: error text missing 'requires CHATLYTICS_BOT_TOKEN'. text=${text.slice(0, 400)}`);
+    }
+    ok("v5.0/P6: chatlytics_configure under api_key mode → isError, no PATCH issued");
+  } finally {
+    server.close();
+  }
+}
+
 (async () => {
   await liveModeCheck();
   await assertEnvVarPrecedence();
@@ -639,7 +859,10 @@ async function assertPollRejectsApiKeyMode() {
   await assertPollToolEnvelope();
   await assertPollAckOrder();
   await assertPollRejectsApiKeyMode();
-  console.log("[smoke] PASS — 8 bundle-behavior assertions green");
+  await assertSendUnifiedApiKeyMode();
+  await assertConfigureTranslatesBody();
+  await assertConfigureRejectsApiKeyMode();
+  console.log("[smoke] PASS — 11 bundle-behavior assertions green");
   process.exit(0);
 })().catch((e) => {
   fail(`unhandled error: ${e?.stack || e}`);

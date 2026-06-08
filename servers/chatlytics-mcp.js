@@ -111,7 +111,7 @@ async function fetchAllowedTools() {
 const allowed = await fetchAllowedTools();
 const allow = (name) => allowed === null || allowed.has(name);
 if (allowed !== null) {
-  console.error(`[chatlytics-mcp] Filtered tool catalog: ${allowed.size}/9 tools allowed (${[...allowed].join(", ")})`);
+  console.error(`[chatlytics-mcp] Filtered tool catalog: ${allowed.size}/10 tools allowed (${[...allowed].join(", ")})`);
 }
 
 // v4.0 CC-V2-01 (Phase 337) — verify bot identity at boot. Bot-token mode
@@ -250,28 +250,23 @@ if (allow("chatlytics_send")) {
         return { isError: true, content: [{ type: "text", text: NO_TOKEN_PROMPT }] };
       }
       try {
-        // v2.1.1: bot tokens (sk_bot_*) MUST send via the gated POST /api/v1/send
-        // route so the server runs executeOutboundGates → checkBotPairing +
-        // session-pin (INV-09). Server v4.5.4 denies send-class verbs on the
-        // generic /api/v1/actions dispatcher for bot callers
-        // (403 bot_send_via_dispatch_denied). /api/v1/send needs a real JID, so
-        // resolve human names first (mirrors chatlytics_read). The server pins
-        // the session to the bot's own for bot tokens, so session is optional
-        // there. Operator api_key callers keep the legacy /api/v1/actions path
-        // (which server-side-defaults the session) to avoid a 400 regression
-        // when no session is configured.
-        if (AUTH_MODE === "bot_token") {
-          const chatId = await resolveChatId(to);
-          const result = await callApi("POST", "/api/v1/send", {
-            chatId,
-            text,
-            session: session || DEFAULT_SESSION || undefined,
-          });
-          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-        }
-        const result = await callApi("POST", "/api/v1/actions", {
-          action: "send",
-          params: { chatId: to, text },
+        // v5.0/P6: UNIFIED send path — ALL auth modes now POST /api/v1/send.
+        // Previously only bot_token used /send while api_key/none fell through to
+        // the generic /api/v1/actions dispatcher. Server v4.5.4 denies send-class
+        // verbs on /api/v1/actions for bot callers (403
+        // bot_send_via_dispatch_denied), and /api/v1/send is the single gated
+        // route that runs executeOutboundGates → checkBotPairing + session-pin
+        // (INV-09). /api/v1/send needs a real JID, so resolve human names first
+        // (mirrors chatlytics_read) for every mode. The server pins the session
+        // to the bot's own for bot tokens (session optional); for api_key callers
+        // we still forward session || DEFAULT_SESSION so the prior
+        // default-resolution behavior is preserved — if no session is available
+        // we send `undefined` and let the server surface any missing-session
+        // error rather than silently dropping the send.
+        const chatId = await resolveChatId(to);
+        const result = await callApi("POST", "/api/v1/send", {
+          chatId,
+          text,
           session: session || DEFAULT_SESSION || undefined,
         });
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
@@ -648,6 +643,135 @@ if (allow("chatlytics_poll")) {
           isError: true,
           content: [{ type: "text", text: `chatlytics_poll network error: ${e.message}` }],
         };
+      }
+    }
+  );
+}
+
+// 10. Self-configure the bot's presentation, trigger, and filters (v5.0/P6).
+// Bot-token mode ONLY — drives PATCH /api/v1/bot/me (the P5 self-config
+// endpoint). Accepts a FRIENDLY flat schema and TRANSLATES it to the server's
+// strict wire contract. Identity/authority fields (session, account, is_default,
+// permission_scope, the token itself) are NOT editable here — the server rejects
+// them with 400, and this tool never sends them. Only the friendly fields the
+// caller actually provides are forwarded (no empty module objects).
+if (allow("chatlytics_configure")) {
+  server.tool(
+    "chatlytics_configure",
+    "Self-configure THIS bot's own presentation and behavior: display name, trigger words/operator, message prefix/suffix, keyword filter, and DM/group access allow-lists. Drives PATCH /api/v1/bot/me. Requires CHATLYTICS_BOT_TOKEN (sk_bot_*). Identity and permissions (session, account, default-bot status, permission scope, the token) CANNOT be changed here — those are administrative and are rejected by the server. Only the fields you pass are updated; omit a field to leave it unchanged. Access policies are always allow-lists.",
+    {
+      display_name: z.string().min(1).max(128).optional().describe("New display name for the bot (1..128 chars)."),
+      trigger: z
+        .object({
+          word: z.string().optional().describe("Single trigger word the bot listens for (e.g. '!sammie')."),
+          operator: z.string().optional().describe("Trigger operator (e.g. 'contains', 'startswith')."),
+          require_both: z.boolean().optional().describe("Require both the trigger word AND a mention/condition."),
+        })
+        .optional()
+        .describe("Trigger configuration. Pass `word` to set the (single) trigger word."),
+      prefix: z.string().optional().describe("Text prepended to every outbound message (message-prefix module)."),
+      suffix: z.string().optional().describe("Text appended to every outbound message (message-suffix module)."),
+      keyword_filter: z
+        .object({
+          keywords: z.array(z.string()).optional().describe("Keywords the bot reacts to."),
+          scope: z.array(z.enum(["dm", "group"])).optional().describe("Where the filter applies: 'dm' and/or 'group'."),
+        })
+        .optional()
+        .describe("Keyword-filter module config."),
+      access_policy: z
+        .object({
+          dm: z.object({ entries: z.array(z.string()) }).optional().describe("DM allow-list JIDs/numbers."),
+          group: z.object({ entries: z.array(z.string()) }).optional().describe("Group allow-list JIDs."),
+        })
+        .optional()
+        .describe("Access policy. Always an allow-list (the server rejects allow_all)."),
+    },
+    async ({ display_name, trigger, prefix, suffix, keyword_filter, access_policy }) => {
+      if (AUTH_MODE === "none") {
+        return { isError: true, content: [{ type: "text", text: NO_TOKEN_PROMPT }] };
+      }
+      // Bot-token mode ONLY — mirror chatlytics_poll's api_key rejection.
+      if (AUTH_MODE !== "bot_token") {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text:
+                `chatlytics_configure requires CHATLYTICS_BOT_TOKEN (sk_bot_*) — bot ` +
+                `self-config is bot-scoped (PATCH /api/v1/bot/me). The legacy ` +
+                `CHATLYTICS_API_KEY operator bearer cannot drive this endpoint. ` +
+                `Provision a bot token at https://app.chatlytics.ai → Bots, then add ` +
+                `CHATLYTICS_BOT_TOKEN to your .claude/settings.json env block and ` +
+                `restart Claude Code.`,
+            },
+          ],
+        };
+      }
+
+      // Translate the FRIENDLY flat schema → the strict P5 wire body. Only
+      // include a key when the caller actually provided the corresponding
+      // friendly field, so the server's .strict() validator never sees an empty
+      // module object. NEVER send identity/authority fields. ALWAYS use
+      // type:"allow_list" for access policy (the server rejects allow_all).
+      const body = {};
+
+      if (display_name !== undefined) body.display_name = display_name;
+
+      if (trigger !== undefined) {
+        const tc = {};
+        if (trigger.word !== undefined) tc.trigger_words = [trigger.word];
+        if (trigger.operator !== undefined) tc.trigger_operator = trigger.operator;
+        if (trigger.require_both !== undefined) tc.require_both = trigger.require_both;
+        // Only attach trigger_config if at least one sub-field was provided.
+        if (Object.keys(tc).length > 0) body.trigger_config = tc;
+      }
+
+      // Modules — build lazily; only attach modules.* keys the caller asked for.
+      const modules = {};
+      if (prefix !== undefined) {
+        modules["message-prefix"] = { config: { prefix } };
+      }
+      if (suffix !== undefined) {
+        modules["message-suffix"] = { config: { suffix } };
+      }
+      if (keyword_filter !== undefined) {
+        const cfg = {};
+        if (keyword_filter.keywords !== undefined) cfg.keywords = keyword_filter.keywords;
+        if (keyword_filter.scope !== undefined) cfg.scope = keyword_filter.scope;
+        if (Object.keys(cfg).length > 0) modules["keyword-filter"] = { config: cfg };
+      }
+      if (access_policy !== undefined) {
+        const cfg = {};
+        if (access_policy.dm !== undefined) {
+          cfg.dm = { type: "allow_list", entries: access_policy.dm.entries };
+        }
+        if (access_policy.group !== undefined) {
+          cfg.group = { type: "allow_list", entries: access_policy.group.entries };
+        }
+        if (Object.keys(cfg).length > 0) modules["access-policy"] = { config: cfg };
+      }
+      if (Object.keys(modules).length > 0) body.modules = modules;
+
+      if (Object.keys(body).length === 0) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text:
+                "chatlytics_configure: nothing to update — pass at least one of " +
+                "display_name, trigger, prefix, suffix, keyword_filter, or access_policy.",
+            },
+          ],
+        };
+      }
+
+      try {
+        const result = await callApi("PATCH", "/api/v1/bot/me", body);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      } catch (e) {
+        return { isError: true, content: [{ type: "text", text: e.message }] };
       }
     }
   );
