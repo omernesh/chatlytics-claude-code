@@ -24,12 +24,15 @@
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { dirname, resolve, join } from "node:path";
 import { once } from "node:events";
+import { copyFileSync, mkdtempSync, rmSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const BUNDLE_SRC = resolve(__dirname, "..", "chatlytics-mcp.js");
+const BUNDLE_DIST = resolve(__dirname, "..", "chatlytics-mcp.bundle.mjs");
 
 function fail(msg) {
   console.error(`[smoke] FAIL: ${msg}`);
@@ -1055,8 +1058,50 @@ async function assertLoginPairings404FailOpen() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Phase 6 — v2.2.0/P3 packaging assertion: the SHIPPED bundle must be a
+// portable ES module. Historical landmine: the bundle shipped as `.js` inside
+// the plugin dir (where servers/package.json `"type":"module"` made it work),
+// but copying it OUT to a stable path (no package.json) crashed Node with
+// "Cannot use import statement outside a module" until manually renamed .mjs.
+// This assertion copies the bundle to a bare temp dir and boots it there.
+// ---------------------------------------------------------------------------
+async function assertBundlePortableEsm() {
+  if (!existsSync(BUNDLE_DIST)) {
+    fail(`portable-esm: ${BUNDLE_DIST} missing — run \`npm run build\` first`);
+  }
+  const tmp = mkdtempSync(join(tmpdir(), "chatlytics-mcp-smoke-"));
+  const copied = join(tmp, "chatlytics-mcp.mjs"); // NO package.json next to it
+  copyFileSync(BUNDLE_DIST, copied);
+  try {
+    const stderrChunks = [];
+    const child = spawn(process.execPath, [copied], {
+      env: { ...process.env, CHATLYTICS_API_URL: "http://127.0.0.1:1", CHATLYTICS_BOT_TOKEN: "sk_bot_PORTABLE_SMOKE" },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    child.stderr.on("data", (c) => stderrChunks.push(c));
+    await new Promise((r) => setTimeout(r, 1200));
+    child.kill("SIGTERM");
+    await once(child, "exit").catch(() => {});
+    const stderr = Buffer.concat(stderrChunks).toString("utf8");
+    if (stderr.includes("Cannot use import statement outside a module")) {
+      fail(`portable-esm: bundle copied to a bare dir crashed as CJS. stderr=${stderr.slice(0, 400)}`);
+    }
+    if (stderr.includes("SyntaxError")) {
+      fail(`portable-esm: bundle copy hit a SyntaxError. stderr=${stderr.slice(0, 400)}`);
+    }
+    if (!stderr.includes("[chatlytics-mcp]")) {
+      fail(`portable-esm: bundle copy did not emit boot log. stderr=${stderr.slice(0, 400)}`);
+    }
+    ok("v2.2.0/P3: bundle (.mjs) boots from a bare temp dir — no rename landmine");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 (async () => {
   await liveModeCheck();
+  await assertBundlePortableEsm();
   await assertEnvVarPrecedence();
   await assertApiKeyFallback();
   await assertFailOpenOnCatalogOutage();
@@ -1071,7 +1116,7 @@ async function assertLoginPairings404FailOpen() {
   await assertConfigureRejectsApiKeyMode();
   await assertLoginSurfacesBotIdentity();
   await assertLoginPairings404FailOpen();
-  console.log("[smoke] PASS — 14 bundle-behavior assertions green");
+  console.log("[smoke] PASS — 15 bundle-behavior assertions green");
   process.exit(0);
 })().catch((e) => {
   fail(`unhandled error: ${e?.stack || e}`);

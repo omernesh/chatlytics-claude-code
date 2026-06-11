@@ -8,9 +8,10 @@ Give your Claude Code agent WhatsApp messaging superpowers via the
 
 The plugin ships:
 
-- **9 MCP tools** — `chatlytics_send`, `chatlytics_read`, `chatlytics_search`,
+- **10 MCP tools** — `chatlytics_send`, `chatlytics_read`, `chatlytics_search`,
   `chatlytics_directory`, `chatlytics_actions`, `chatlytics_health`,
-  `chatlytics_login`, `chatlytics_dispatch`, `chatlytics_poll`.
+  `chatlytics_login`, `chatlytics_dispatch`, `chatlytics_poll`,
+  `chatlytics_configure`.
 - **A skill** that teaches Claude Code when and how to use WhatsApp.
 
 > **New here? Read [QUICKSTART.md](./QUICKSTART.md) — first WhatsApp message from Claude Code in under 5 minutes.**
@@ -44,8 +45,54 @@ claude plugin install chatlytics@chatlytics-claude-code
 ```
 
 That fetches a single self-contained bundled MCP server
-(`servers/chatlytics-mcp.bundle.js`, ~715KB) plus the skill. **No `npm install`
-needed** — the bundle ships all dependencies inline.
+(`servers/chatlytics-mcp.bundle.mjs`, ~730KB) plus the skill. **No `npm install`
+needed** — the bundle ships all dependencies inline. The `.mjs` extension is
+deliberate (v2.2.0+): the bundle is an ES module that now loads from ANY path,
+with or without a colocated `package.json`.
+
+### Scripted user-scope install (recommended for operators)
+
+Plugin-cache directories are **version-pinned and wiped on every plugin
+update** — anything registered by absolute path into the cache dies on
+upgrade. For a durable, plugin-manager-independent install, use the bundled
+installer. It copies the server to a stable path
+(`~/.chatlytics/mcp/chatlytics-mcp.mjs`) and registers it user-scoped:
+
+```bash
+git clone https://github.com/omernesh/chatlytics-claude-code.git
+cd chatlytics-claude-code
+node scripts/install.mjs --token sk_bot_your-token
+```
+
+Options (all prompt-free; env vars work too):
+
+```bash
+node scripts/install.mjs \
+  --token sk_bot_xxx \                       # or env CHATLYTICS_BOT_TOKEN (preferred)
+  --url https://node.chatlytics.ai \         # or env CHATLYTICS_API_URL (this is the default)
+  --session your-session-id                  # or env CHATLYTICS_SESSION (optional)
+# --api-key <key>                            # legacy CHATLYTICS_API_KEY fallback
+# --dry-run                                  # print actions, change nothing
+```
+
+The script is **idempotent** — re-run it after a `git pull` (or plugin update)
+to refresh the stable copy and re-register. Under the hood it runs:
+
+```bash
+claude mcp add -s user chatlytics \
+  -e CHATLYTICS_BOT_TOKEN=sk_bot_... \
+  -e CHATLYTICS_API_URL=https://node.chatlytics.ai \
+  -- node ~/.chatlytics/mcp/chatlytics-mcp.mjs
+```
+
+> **Restart required:** mid-session `claude mcp add` installs do NOT surface
+> tools until the Claude Code session restarts. Restart, then verify with the
+> `chatlytics_login` tool.
+
+**URL guidance:** the default `https://node.chatlytics.ai` (Cloudflare tunnel)
+works anywhere. On-prem/LAN operators should prefer the direct LAN URL
+(e.g. `http://192.168.1.133:8050`) — it avoids the Cloudflare tunnel's
+concurrent long-poll limit (see Troubleshooting).
 
 ### Local / development install
 
@@ -57,8 +104,12 @@ cd chatlytics-claude-code
 cd servers && npm install && npm run build   # rebuild bundle after source edits
 ```
 
-The `build` script (esbuild) re-bundles `chatlytics-mcp.js` → `chatlytics-mcp.bundle.js`.
+The `build` script (esbuild) re-bundles `chatlytics-mcp.js` → `chatlytics-mcp.bundle.mjs`.
 The bundle is the file Claude Code actually runs; ship it on every release.
+Keep the `.mjs` extension — a `.js` copy outside `servers/` (no
+`"type":"module"` package.json next to it) crashes Node with
+"Cannot use import statement outside a module". The smoke test enforces this
+by booting a copy of the bundle from a bare temp dir.
 
 ## Setup
 
@@ -111,6 +162,16 @@ override it inline only if you self-host.
 The test calls `GET ${CHATLYTICS_API_URL}/health` with your bearer token and
 asserts that `webhook_registered: true`. Exits 0 on success, 1 on failure
 with a clear error.
+
+## Troubleshooting connection errors
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| Requests **time out** (~10–30s, `AbortError`) | `CHATLYTICS_API_URL` points at a dead/unroutable IP (classic case: a stale Tailscale IP whose data-plane died — TCP half-connects, HTTP hangs) | Switch to the DNS URL `https://node.chatlytics.ai`, or the LAN URL (e.g. `http://192.168.1.133:8050`) if on-prem. Re-run `node scripts/install.mjs --url <new-url>`. |
+| **Connection refused** (instant) | Wrong host or port — something answered routing but nothing listens there | Verify host/port. Hosted default is `https://node.chatlytics.ai` (no port in the URL — Cloudflare proxies 443). |
+| **HTTP 401** | Bad/rotated/revoked token | Rotate at app.chatlytics.ai → Bots, copy the new `sk_bot_*`, re-run the install script with `--token`. |
+| **HTTP 502** (especially during `chatlytics_poll`) | Cloudflare tunnel concurrent long-poll limit (~4 concurrent long-polls per tunnel) | Use the LAN URL instead of `node.chatlytics.ai` for on-prem consumers; keep remote consumers few. |
+| Tools missing after install | Mid-session `claude mcp add` — tools don't surface until restart | Restart the Claude Code session. |
 
 ## Usage
 

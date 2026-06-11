@@ -49,7 +49,7 @@ are auto-closed by the marketplace repo's CI).
 - **Manifest completeness** — `license`, `repository`, `homepage`, `author`
   fields all populated in both `plugin.json` and `marketplace.json`
 - **Reproducible install** — v1.1.2 tag pinned on GitHub; bundled MCP server
-  ships in `servers/chatlytics-mcp.bundle.js` (no post-install steps)
+  ships in `servers/chatlytics-mcp.bundle.mjs` (no post-install steps)
 
 ## After approval
 

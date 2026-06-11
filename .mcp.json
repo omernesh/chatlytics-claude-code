@@ -2,7 +2,7 @@
   "mcpServers": {
     "chatlytics": {
       "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/servers/chatlytics-mcp.bundle.js"],
+      "args": ["${CLAUDE_PLUGIN_ROOT}/servers/chatlytics-mcp.bundle.mjs"],
       "env": {
         "CHATLYTICS_API_URL": "${CHATLYTICS_API_URL}",
         "CHATLYTICS_BOT_TOKEN": "${CHATLYTICS_BOT_TOKEN}",

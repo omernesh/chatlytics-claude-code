@@ -24,7 +24,7 @@ running `claude plugin marketplace add` first.
 | CHANGELOG.md | ✅ | Versioned independently from Chatlytics monorepo |
 | LICENSE | ✅ | MIT |
 | Smoke test | ✅ | `servers/test/smoke.js` verifies `/health` + `webhook_registered:true` |
-| Bundled MCP server | ✅ | `servers/chatlytics-mcp.bundle.js` (esbuild, single file, no deps) |
+| Bundled MCP server | ✅ | `servers/chatlytics-mcp.bundle.mjs` (esbuild, single file, no deps) |
 | Tag/version coupling | ✅ | Plugin version === `package.json` version === `marketplace.json` version |
 
 ## What's missing for submission (nice-to-have polish)

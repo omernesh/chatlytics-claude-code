@@ -6,6 +6,42 @@
 
 All notable changes to the Chatlytics Claude Code plugin are documented here.
 
+## [2.2.0] — 2026-06-11
+
+### Changed
+
+- **Bundle ships as `chatlytics-mcp.bundle.mjs` (was `.bundle.js`) — kills the
+  rename landmine.** The bundle is an ES module; the old `.js` name only worked
+  inside `servers/` because `servers/package.json` has `"type":"module"`.
+  Copying the bundle out to a stable path (the recommended survivability
+  pattern) crashed Node with "Cannot use import statement outside a module"
+  until manually renamed `.mjs`. The build output, `.mcp.json` entry, and docs
+  now use `.mjs` so the bundle loads from ANY path. A new smoke assertion
+  boots a copy of the bundle from a bare temp dir (no `package.json`) to lock
+  this in (15 bundle-behavior assertions total).
+
+### Added
+
+- **`scripts/install.mjs` — scripted user-scope install.** Copies the bundle
+  to a stable path outside any version-pinned plugin cache
+  (`~/.chatlytics/mcp/chatlytics-mcp.mjs`) and registers it via
+  `claude mcp add -s user chatlytics -e CHATLYTICS_BOT_TOKEN=... -- node <path>`.
+  Idempotent (remove-then-add + overwrite-copy), prompt-free (token/url from
+  args or env; clear get-a-token instructions when missing), Windows + POSIX,
+  INV-02 (credentials redacted from printed commands). Also exposed as
+  `npm run install:user` and a `chatlytics-mcp-install` bin entry.
+- **Docs: session-restart requirement + connection troubleshooting matrix.**
+  Mid-session `claude mcp add` does not surface tools until the Claude Code
+  session restarts (now documented in README + QUICKSTART). New troubleshooting
+  mapping: timeout → dead/unroutable IP (use DNS/LAN URL); connection refused →
+  wrong host/port; 401 → bad/rotated token; 502 → Cloudflare tunnel concurrent
+  long-poll limit (use LAN URL on-prem).
+
+### Fixed
+
+- Docs drift: tool count corrected to 10 (`chatlytics_configure` was missing
+  from README/QUICKSTART/marketplace descriptions).
+
 ## [2.1.2] — 2026-06-07
 
 ### Added

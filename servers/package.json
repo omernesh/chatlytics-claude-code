@@ -1,10 +1,10 @@
 {
   "name": "chatlytics-mcp",
-  "version": "2.1.2",
+  "version": "2.2.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "esbuild chatlytics-mcp.js --bundle --platform=node --target=node18 --format=esm --outfile=chatlytics-mcp.bundle.js --packages=bundle",
+    "build": "esbuild chatlytics-mcp.js --bundle --platform=node --target=node18 --format=esm --outfile=chatlytics-mcp.bundle.mjs --packages=bundle",
     "test": "node test/smoke.js"
   },
   "dependencies": {

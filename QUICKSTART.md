@@ -76,6 +76,23 @@ claude plugin list
 
 You should see `chatlytics@chatlytics-claude-code` with status `✔ enabled`.
 
+### Alternative: scripted user-scope install (survives plugin updates)
+
+Plugin-cache directories are version-pinned and wiped on every plugin update.
+If you prefer a durable standalone install (no plugin manager involved), use
+the installer script — it copies the MCP bundle to a stable path
+(`~/.chatlytics/mcp/chatlytics-mcp.mjs`) and registers it user-scoped:
+
+```bash
+git clone https://github.com/omernesh/chatlytics-claude-code.git
+cd chatlytics-claude-code
+node scripts/install.mjs --token sk_bot_your-token
+```
+
+Re-running the script is safe — it updates the copy and re-registers. With
+this route you can skip the `env` block in step 4 (the token/URL are baked
+into the MCP registration); the restart in step 4 still applies.
+
 ---
 
 ## 4. Configure
@@ -113,7 +130,9 @@ Or, for legacy v3.37 setups still on the operator api_key:
 If the file already has other keys, merge into the existing `env` object —
 don't overwrite the whole file.
 
-Restart Claude Code so it picks up the new env vars.
+Restart Claude Code so it picks up the new env vars. **The restart is not
+optional** — MCP servers added or reconfigured mid-session do not surface
+their tools until the session restarts.
 
 ---
 
@@ -159,7 +178,9 @@ Open WhatsApp on your phone and verify the message landed.
 | `❌ Chatlytics API rejected the credential (HTTP 401)` | Bot token (or legacy api_key) wrong, expired, revoked, or grace-window-expired after rotation | If on `CHATLYTICS_BOT_TOKEN`: rotate at app.chatlytics.ai → Bots → rotate-token, copy the new `sk_bot_*`, update `.claude/settings.json`, restart Claude Code. If on legacy `CHATLYTICS_API_KEY`: re-copy from Settings → API Keys. |
 | `❌ Chatlytics API rejected the credential (HTTP 403)` | Credential valid but lacks permission for the requested action (bot's `permission_scope` blocks it) | Either pick a tool inside the bot's allowed actions, or update the bot's `permission_scope` at app.chatlytics.ai → Bots → <bot> → Permissions. Legacy api_key path: contact support — your account may not be enabled. |
 | `chatlytics_poll requires CHATLYTICS_BOT_TOKEN` | Tried to long-poll while only `CHATLYTICS_API_KEY` is set | Long-poll inbound is bot-scoped. Provision a bot token (step 2 above) and add `CHATLYTICS_BOT_TOKEN` to `.claude/settings.json`. |
-| `network error calling .../health` or `AbortError` | `CHATLYTICS_API_URL` wrong, or your network can't reach it | Double-check the URL has no trailing slash and is `https://app.chatlytics.ai` (not `http://`, not your local IP). |
+| `network error calling .../health` or `AbortError` (request **times out**) | `CHATLYTICS_API_URL` points at a dead/unroutable IP (e.g. a stale Tailscale IP — TCP half-connects, HTTP hangs) | Switch to the DNS URL `https://node.chatlytics.ai` (or your LAN URL if on-prem). No trailing slash. |
+| **Connection refused** (fails instantly) | Wrong host or port — nothing is listening there | Verify host/port. The hosted URL is `https://node.chatlytics.ai` with no port (Cloudflare proxies 443). |
+| **HTTP 502**, especially during `chatlytics_poll` | Cloudflare tunnel concurrent long-poll limit (~4 concurrent long-polls) | On-prem consumers should use the LAN URL instead of `node.chatlytics.ai`. |
 | `⚠️ webhook_registered is not true` | WhatsApp session disconnected or never paired | Open https://app.chatlytics.ai → Sessions. Re-scan the QR code from WhatsApp on your phone. |
 | `No WhatsApp contact, group, or channel found matching "X"` | Name doesn't match any chat | Ask Claude to "search my WhatsApp for X" — the search tool is fuzzier than send/read. |
 | `Multiple matches for "X"` | Ambiguous name | Claude will list candidates with their JIDs. Reply with the specific JID. |
@@ -170,7 +191,7 @@ Open WhatsApp on your phone and verify the message landed.
 
 ## 8. Going further
 
-The plugin ships **9 MCP tools**:
+The plugin ships **10 MCP tools**:
 
 - `chatlytics_send` — send a message
 - `chatlytics_read` — read recent messages
@@ -183,6 +204,8 @@ The plugin ships **9 MCP tools**:
   polls, react to messages, manage labels, change presence, send media, etc.)
 - `chatlytics_poll` — long-poll for inbound WhatsApp messages addressed to
   your bot (webhook-less). Requires `CHATLYTICS_BOT_TOKEN`.
+- `chatlytics_configure` — self-configure the bot (display name, trigger,
+  prefix/suffix, keyword filter, access policy). Requires `CHATLYTICS_BOT_TOKEN`.
 
 For the full catalog and advanced patterns, see
 [`skills/chatlytics/SKILL.md`](./skills/chatlytics/SKILL.md). It's the same
