@@ -3,10 +3,12 @@
 > Submission steps for getting `chatlytics-claude-code` listed in the
 > `anthropics/claude-plugins-official` marketplace.
 
-**Status as of 2026-05-17:** Plugin is v1.1.2, tagged + pushed, live-verified
-end-to-end (real WhatsApp send from Claude Code shipped 2026-05-16). Ready to
-submit. The submission step requires a web form (PRs from non-Anthropic authors
-are auto-closed by the marketplace repo's CI).
+**Status as of 2026-06-11:** Plugin is v2.2.0, tagged + pushed. v1.1.2 was
+live-verified end-to-end (real WhatsApp send from Claude Code, 2026-05-16);
+the v2.x line adds bot-token auth, long-poll inbound, bot self-config, and a
+scripted user-scope installer. Ready to submit. The submission step requires
+a web form (PRs from non-Anthropic authors are auto-closed by the marketplace
+repo's CI).
 
 ## Submit
 
@@ -23,15 +25,18 @@ are auto-closed by the marketplace repo's CI).
 3. **Pitch (copy-paste ready):**
 
    > **Chatlytics** — WhatsApp messaging for Claude Code via the
-   > [Chatlytics](https://chatlytics.ai) gateway. 8 MCP tools
+   > [Chatlytics](https://chatlytics.ai) gateway. 10 MCP tools
    > (`chatlytics_send`, `chatlytics_read`, `chatlytics_search`,
    > `chatlytics_dispatch`, `chatlytics_login`, `chatlytics_actions`,
-   > `chatlytics_directory`, `chatlytics_health`) plus an auto-triggering
-   > skill that fires on WhatsApp asks. Bundled MCP server — zero
-   > `npm install` after `claude plugin install`. MIT licensed. Includes a
-   > smoke test (`npm test`) that asserts `GET /health` returns
-   > `webhook_registered:true`. v1.1.2 is live-verified end-to-end (real
-   > WhatsApp send from Claude Code shipped 2026-05-16).
+   > `chatlytics_directory`, `chatlytics_health`, `chatlytics_poll`,
+   > `chatlytics_configure`) plus an auto-triggering skill that fires on
+   > WhatsApp asks. Telegram-style bot-token onboarding (`sk_bot_*`,
+   > verified at boot via `GET /api/v1/bot/me`) and long-poll inbound
+   > (no public webhook needed). Bundled single-file MCP server — zero
+   > `npm install` after `claude plugin install`. MIT licensed. Smoke test
+   > (`npm test`) runs 15 bundle-behavior assertions plus an optional live
+   > `GET /health` check asserting `webhook_registered:true`. Live-verified
+   > end-to-end (real WhatsApp send from Claude Code).
 
 4. **Submit and wait.** Anthropic will run automated security/privacy review
    (`.github/policy/prompt.md` checks scope, telemetry, description honesty,
@@ -48,11 +53,11 @@ are auto-closed by the marketplace repo's CI).
   no marketing fluff
 - **Manifest completeness** — `license`, `repository`, `homepage`, `author`
   fields all populated in both `plugin.json` and `marketplace.json`
-- **Reproducible install** — v1.1.2 tag pinned on GitHub; bundled MCP server
+- **Reproducible install** — v2.2.0 tag pinned on GitHub; bundled MCP server
   ships in `servers/chatlytics-mcp.bundle.mjs` (no post-install steps)
 
 ## After approval
 
 - Update `README.md` install snippet to use the official marketplace name
-- Bump `CHANGELOG.md` with a "1.1.2 — listed in official marketplace" line
+- Bump `CHANGELOG.md` with a "listed in official marketplace" line
 - Cross-post to the Chatlytics docs site

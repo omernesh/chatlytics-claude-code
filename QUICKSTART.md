@@ -103,24 +103,28 @@ Open your Claude Code settings file:
 - **Global (recommended for beta):** `~/.claude/settings.json` on macOS/Linux,
   `%USERPROFILE%\.claude\settings.json` on Windows.
 
-Add or merge the following `env` block (recommended v4.0 shape):
+Add or merge the following `env` block (recommended v4.0 shape — the bot
+token is the only required var):
 
 ```json
 {
   "env": {
-    "CHATLYTICS_API_URL": "https://app.chatlytics.ai",
-    "CHATLYTICS_BOT_TOKEN": "sk_bot_paste-your-token-here",
-    "CHATLYTICS_SESSION": "your-session-id"
+    "CHATLYTICS_BOT_TOKEN": "sk_bot_paste-your-token-here"
   }
 }
 ```
 
-Or, for legacy v3.37 setups still on the operator api_key:
+`CHATLYTICS_API_URL` is optional — it defaults to
+`https://node.chatlytics.ai` (the hosted API). Set it only if you self-host.
+`CHATLYTICS_SESSION` is optional too: bot tokens are pinned server-side to
+the bot's own session.
+
+For legacy v3.37 setups still on the operator api_key (here the session IS
+needed for sends):
 
 ```json
 {
   "env": {
-    "CHATLYTICS_API_URL": "https://app.chatlytics.ai",
     "CHATLYTICS_API_KEY": "paste-your-api-key-here",
     "CHATLYTICS_SESSION": "your-session-id"
   }
@@ -145,11 +149,16 @@ In any Claude Code session, ask:
 Claude should reply with something like:
 
 ```
-✅ Connected to Chatlytics at https://app.chatlytics.ai.
+✅ Connected to Chatlytics at https://node.chatlytics.ai (auth mode: bot_token).
 Webhook registered. Sessions: 1.
+Bot: claude-code (fp=a1b2c3d4)
+Session: abc12345_yourname
+Default bot: no
 ```
 
-If you see a ❌ instead, jump to **Common issues** below.
+The bot identity block appears in bot-token mode (it's fetched live from
+`GET /api/v1/bot/me`); paired entities are listed too where the server
+supports it. If you see a ❌ instead, jump to **Common issues** below.
 
 ---
 
@@ -207,9 +216,16 @@ The plugin ships **10 MCP tools**:
 - `chatlytics_configure` — self-configure the bot (display name, trigger,
   prefix/suffix, keyword filter, access policy). Requires `CHATLYTICS_BOT_TOKEN`.
 
-For the full catalog and advanced patterns, see
-[`skills/chatlytics/SKILL.md`](./skills/chatlytics/SKILL.md). It's the same
-guide Claude itself reads when deciding how to use these tools.
+Deeper docs:
+
+- [docs/TOOLS.md](./docs/TOOLS.md) — full per-tool reference (params,
+  endpoints, auth requirements).
+- [docs/AUTHENTICATION.md](./docs/AUTHENTICATION.md) — bot-token vs legacy
+  api_key, boot-time identity verification, permission scoping.
+- [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) — the full failure
+  matrix (a superset of the table above).
+- [`skills/chatlytics/SKILL.md`](./skills/chatlytics/SKILL.md) — the same
+  guide Claude itself reads when deciding how to use these tools.
 
 Example advanced asks Claude can handle:
 

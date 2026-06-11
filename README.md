@@ -16,6 +16,24 @@ The plugin ships:
 
 > **New here? Read [QUICKSTART.md](./QUICKSTART.md) — first WhatsApp message from Claude Code in under 5 minutes.**
 
+**Docs:** [Tool reference](./docs/TOOLS.md) ·
+[Authentication & scoping](./docs/AUTHENTICATION.md) ·
+[Troubleshooting](./docs/TROUBLESHOOTING.md)
+
+## What's new in v2.2.0
+
+- **Bundle ships as `.mjs`** (`servers/chatlytics-mcp.bundle.mjs`) — the old
+  `.js`→`.mjs` rename step is dead. The bundle now loads from any path, with
+  or without a colocated `package.json`.
+- **Scripted user-scope install** (`scripts/install.mjs`) — copies the bundle
+  to a stable path outside the version-pinned plugin cache and registers it
+  via `claude mcp add -s user`. Survives plugin updates; idempotent.
+- **`chatlytics_configure`** (v2.1.x line) — bot self-config via
+  `PATCH /api/v1/bot/me`. Tool count is now **10**.
+- **Unified send path** — `chatlytics_send` posts to the gated
+  `POST /api/v1/send` for all auth modes (see
+  [Authentication & scoping](./docs/AUTHENTICATION.md)).
+
 ## What's new in v2.0 (Phase 337 — CC-PLUGIN-V2)
 
 - **Telegram-style "paste your bot token" onboarding.** The plugin now reads
@@ -136,8 +154,18 @@ them through to the MCP server stdio process.
 **Note on `CHATLYTICS_API_KEY`:** v3.37 operators using the shared admin
 api_key bearer can keep using it — the plugin falls back to it when
 `CHATLYTICS_BOT_TOKEN` is unset. The legacy path stays back-compat for the
-8 v3.37 tools but cannot drive `chatlytics_poll` (which is bot-bearer
-scoped on the server side). New installs should use `CHATLYTICS_BOT_TOKEN`.
+8 v3.37 tools but cannot drive `chatlytics_poll` or `chatlytics_configure`
+(both are bot-bearer scoped on the server side). New installs should use
+`CHATLYTICS_BOT_TOKEN`.
+
+**Auth scoping in one paragraph:** all requests carry
+`Authorization: Bearer <credential>` (never `X-Api-Key`). Text sends go
+through the gated `POST /api/v1/send` for every auth mode; on the generic
+`POST /api/v1/actions` dispatcher, bot tokens are confined to a server-side
+dispatchable-actions allowlist (no admin/destructive verbs —
+`403 bot_action_not_dispatchable`; send-class verbs there return
+`403 bot_send_via_dispatch_denied`). Full details:
+[docs/AUTHENTICATION.md](./docs/AUTHENTICATION.md).
 
 ## Verify install
 
@@ -145,25 +173,37 @@ Easiest path: in any Claude Code session, ask:
 
 > use `chatlytics_login` to test my connection
 
-You should get back `✅ Connected to ${URL}. Webhook registered. Sessions: N.`
-or a clear error explaining what to fix.
+You should get back
+
+```
+✅ Connected to Chatlytics at <URL> (auth mode: bot_token). Webhook registered. Sessions: N.
+Bot: <display_name> (fp=<8-char fingerprint>)
+Session: <session_id>
+Default bot: yes
+```
+
+or a clear error explaining what to fix. In bot-token mode the identity block
+is fetched fresh from `GET /api/v1/bot/me`; paired entities are listed too
+once the server exposes `GET /api/v1/bot/me/pairings` (fail-open until then).
 
 Alternative — run the standalone smoke test from a checked-out repo:
 
 ```bash
 cd servers
-CHATLYTICS_BOT_TOKEN=sk_bot_your-bot-token \
 npm test
 ```
 
-`CHATLYTICS_API_URL` is optional and defaults to `https://node.chatlytics.ai`;
-override it inline only if you self-host.
-
-The test calls `GET ${CHATLYTICS_API_URL}/health` with your bearer token and
-asserts that `webhook_registered: true`. Exits 0 on success, 1 on failure
-with a clear error.
+That runs 15 bundle-behavior assertions against a local mock server (no
+credentials needed). To also hit a live endpoint, set **both**
+`CHATLYTICS_API_URL` and `CHATLYTICS_API_KEY` — the test then calls
+`GET ${CHATLYTICS_API_URL}/health` with the bearer and asserts
+`webhook_registered: true`. Exits 0 on success, 1 on failure.
 
 ## Troubleshooting connection errors
+
+The quick matrix below covers connection failures; the full failure matrix
+(auth errors, 403 scope denials, poll cursor errors, plugin-cache wipes) is
+in [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md).
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|

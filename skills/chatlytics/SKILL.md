@@ -15,7 +15,8 @@ The plugin reads its bearer credential with this precedence:
    Provision at https://app.chatlytics.ai → Bots. Identifies the bot to the
    server (scoped to its `permission_scope`). Required for `chatlytics_poll`.
 2. **`CHATLYTICS_API_KEY`** (legacy v3.37 fallback) — operator/admin bearer.
-   Still works for the 8 v3.37 tools but cannot drive the long-poll endpoint.
+   Still works for the 8 v3.37 tools but cannot drive the bot-scoped tools
+   (`chatlytics_poll`, `chatlytics_configure`).
 
 The plugin verifies its identity at boot via `GET /api/v1/bot/me` (bot-token
 mode only) and logs `Bot identity: <display_name> (fp=<8-char>)`. INV-02 —
@@ -39,6 +40,7 @@ when self-hosting or pointing at a non-default endpoint.
 | `chatlytics_login` | User just installed the plugin and wants to verify their API key + connection |
 | `chatlytics_dispatch` | User asks for any action beyond send/read/search (groups, polls, reactions, labels, media, presence, etc.) |
 | `chatlytics_poll` | Poll for inbound WhatsApp messages (long-poll, webhook-less). Requires `CHATLYTICS_BOT_TOKEN`. |
+| `chatlytics_configure` | User wants to change the bot's own display name, trigger word, message prefix/suffix, keyword filter, or DM/group allow-lists. Requires `CHATLYTICS_BOT_TOKEN`. |
 
 ## How to Send Messages
 
@@ -88,6 +90,22 @@ Examples:
 
 If the action name is wrong, the API returns a clear error — call
 `chatlytics_actions` to re-check the catalog.
+
+Bot-token scoping: on the dispatch route, bot tokens are confined to a
+server-side dispatchable-actions allowlist — admin/destructive verbs return
+`403 bot_action_not_dispatchable`, and send-class verbs return
+`403 bot_send_via_dispatch_denied` (use `chatlytics_send` for text sends —
+it routes through the gated `/api/v1/send`).
+
+## Self-configuration
+
+Use `chatlytics_configure` (bot-token mode only) when the user wants to
+change how THIS bot presents or behaves: `display_name`, `trigger`
+(word/operator/require_both), outbound `prefix`/`suffix`, `keyword_filter`
+(keywords + dm/group scope), or `access_policy` DM/group allow-lists. Only
+the fields you pass are updated. Identity and permissions (session, account,
+default-bot status, permission scope, the token) CANNOT be changed here —
+the server rejects them.
 
 ## Inbound: long-poll mode
 
