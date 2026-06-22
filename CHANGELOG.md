@@ -6,6 +6,21 @@
 
 All notable changes to the Chatlytics Claude Code plugin are documented here.
 
+## [2.3.0] — 2026-06-22
+
+### Fixed
+
+- **Name → JID resolution now uses the fast directory index instead of a
+  timeout-prone live search.** `resolveChatId()` (the implicit hop behind
+  `chatlytics_send` / `chatlytics_read` when given a contact/group *name*) and
+  the `chatlytics_search` tool both called `POST /api/v1/actions {action:"search"}`,
+  which triggers a **live WAHA query** that routinely times out for bot tokens
+  (observed 25s+, past `callApi`'s 30s ceiling) — so name-based sends hung. Both
+  now call `GET /api/v1/directory?search=`, a local SQLite lookup that returns
+  `{jid, displayName, isGroup}` immediately. Substring matches that return
+  several rows prefer a single exact (case-insensitive) name match before the
+  disambiguation picker. JIDs passed directly are unaffected.
+
 ## [2.2.0] — 2026-06-11
 
 ### Changed

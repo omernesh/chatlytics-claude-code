@@ -21145,42 +21145,38 @@ function clampLongPollTimeout(value) {
   const n = typeof value === "number" && Number.isFinite(value) ? value : DEFAULT_LONGPOLL_TIMEOUT_MS;
   return Math.min(Math.max(MIN_LONGPOLL_TIMEOUT_MS, n), MAX_LONGPOLL_TIMEOUT_MS);
 }
-var server = new McpServer({ name: "chatlytics", version: "2.0.0" });
+var server = new McpServer({ name: "chatlytics", version: "2.3.0" });
 function looksLikeJid(s) {
   if (typeof s !== "string" || s.length === 0) return false;
   return /@(c\.us|g\.us|lid|newsletter)$/i.test(s);
 }
 async function resolveChatId(input) {
   if (looksLikeJid(input)) return input;
-  const result = await callApi("POST", "/api/v1/actions", {
-    action: "search",
-    params: { query: input }
-  });
+  const qs = new URLSearchParams({ search: input, limit: "10" });
+  const result = await callApi("GET", `/api/v1/directory?${qs.toString()}`);
+  const rows = Array.isArray(result?.contacts) ? result.contacts : [];
   const candidates = [];
-  const collect = (arr) => {
-    if (!Array.isArray(arr)) return;
-    for (const c of arr) {
-      const jid = c?.chatId || c?.jid || c?.id;
-      if (jid && looksLikeJid(jid)) {
-        candidates.push({ jid, name: c?.name || c?.displayName || jid, type: c?.type });
-      }
+  for (const c of rows) {
+    const jid = c?.jid || c?.chatId || c?.id;
+    if (jid && looksLikeJid(jid)) {
+      candidates.push({
+        jid,
+        name: c?.displayName || c?.name || jid,
+        type: c?.isGroup ? "group" : "contact"
+      });
     }
-  };
-  if (Array.isArray(result)) collect(result);
-  else if (result && typeof result === "object") {
-    collect(result.contacts);
-    collect(result.groups);
-    collect(result.channels);
-    collect(result.newsletters);
-    collect(result.results);
   }
   if (candidates.length === 0) {
     throw new Error(
-      `No WhatsApp contact, group, or channel found matching "${input}". Use chatlytics_search or chatlytics_directory to browse available chats.`
+      `No WhatsApp contact, group, or channel found matching "${input}". Use chatlytics_directory to browse available chats.`
     );
   }
   if (candidates.length > 1) {
-    const list = candidates.slice(0, 10).map((c) => `  - ${c.name} (${c.jid})${c.type ? ` [${c.type}]` : ""}`).join("\n");
+    const exact = candidates.filter(
+      (c) => c.name.toLowerCase() === input.toLowerCase()
+    );
+    if (exact.length === 1) return exact[0].jid;
+    const list = candidates.slice(0, 10).map((c) => `  - ${c.name} (${c.jid}) [${c.type}]`).join("\n");
     throw new Error(
       `Multiple matches for "${input}" \u2014 please pick one and pass the JID instead:
 ${list}`
@@ -21252,10 +21248,8 @@ if (allow("chatlytics_search")) {
         return { isError: true, content: [{ type: "text", text: NO_TOKEN_PROMPT }] };
       }
       try {
-        const result = await callApi("POST", "/api/v1/actions", {
-          action: "search",
-          params: { query }
-        });
+        const qs = new URLSearchParams({ search: query, limit: "25" });
+        const result = await callApi("GET", `/api/v1/directory?${qs.toString()}`);
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       } catch (e) {
         return { isError: true, content: [{ type: "text", text: e.message }] };

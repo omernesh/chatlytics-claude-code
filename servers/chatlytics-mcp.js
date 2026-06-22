@@ -203,7 +203,7 @@ function clampLongPollTimeout(value) {
   return Math.min(Math.max(MIN_LONGPOLL_TIMEOUT_MS, n), MAX_LONGPOLL_TIMEOUT_MS);
 }
 
-const server = new McpServer({ name: "chatlytics", version: "2.0.0" });
+const server = new McpServer({ name: "chatlytics", version: "2.3.0" });
 
 // Detect WhatsApp JID-shaped strings. WAHA uses 4 suffix families:
 //   <phone>@c.us           — 1:1 contacts
@@ -215,49 +215,54 @@ function looksLikeJid(s) {
   return /@(c\.us|g\.us|lid|newsletter)$/i.test(s);
 }
 
-// CC-P6: pre-resolve a human name to a JID via the search action.
+// CC-P6: pre-resolve a human name to a JID.
 // Returns a JID string on a single match. Throws on zero or multiple matches
 // (with a clear, actionable error message for the LLM to relay to the user).
+//
+// v2.3.0: resolve via the FAST, structured directory lookup
+// (GET /api/v1/directory?search=) instead of the prior
+// POST /api/v1/actions {action:"search"} path. The latter triggers a LIVE WAHA
+// query that routinely TIMES OUT for bot tokens (observed 25s+, exceeding
+// callApi's 30s ceiling) — so name-based send/read was hang-prone. The
+// directory is a local SQLite index (thousands of chats) that returns
+// {jid, displayName, isGroup} immediately. Both contacts AND groups come back
+// in `contacts[]`, flagged by isGroup.
 async function resolveChatId(input) {
   if (looksLikeJid(input)) return input;
 
-  const result = await callApi("POST", "/api/v1/actions", {
-    action: "search",
-    params: { query: input },
-  });
+  const qs = new URLSearchParams({ search: input, limit: "10" });
+  const result = await callApi("GET", `/api/v1/directory?${qs.toString()}`);
 
-  // Search response shape varies (WAHA + directory results merged). Normalize:
-  //  - flat array of {chatId|jid|id, name, type}
-  //  - { contacts: [], groups: [], channels: [] }
+  const rows = Array.isArray(result?.contacts) ? result.contacts : [];
   const candidates = [];
-  const collect = (arr) => {
-    if (!Array.isArray(arr)) return;
-    for (const c of arr) {
-      const jid = c?.chatId || c?.jid || c?.id;
-      if (jid && looksLikeJid(jid)) {
-        candidates.push({ jid, name: c?.name || c?.displayName || jid, type: c?.type });
-      }
+  for (const c of rows) {
+    const jid = c?.jid || c?.chatId || c?.id;
+    if (jid && looksLikeJid(jid)) {
+      candidates.push({
+        jid,
+        name: c?.displayName || c?.name || jid,
+        type: c?.isGroup ? "group" : "contact",
+      });
     }
-  };
-  if (Array.isArray(result)) collect(result);
-  else if (result && typeof result === "object") {
-    collect(result.contacts);
-    collect(result.groups);
-    collect(result.channels);
-    collect(result.newsletters);
-    collect(result.results);
   }
 
   if (candidates.length === 0) {
     throw new Error(
       `No WhatsApp contact, group, or channel found matching "${input}". ` +
-      `Use chatlytics_search or chatlytics_directory to browse available chats.`
+      `Use chatlytics_directory to browse available chats.`
     );
   }
   if (candidates.length > 1) {
+    // A substring search can return several rows (e.g. "sammie" matches a
+    // contact AND group chats). Prefer a single exact case-insensitive name
+    // match before falling back to the disambiguation picker.
+    const exact = candidates.filter(
+      (c) => c.name.toLowerCase() === input.toLowerCase()
+    );
+    if (exact.length === 1) return exact[0].jid;
     const list = candidates
       .slice(0, 10)
-      .map((c) => `  - ${c.name} (${c.jid})${c.type ? ` [${c.type}]` : ""}`)
+      .map((c) => `  - ${c.name} (${c.jid}) [${c.type}]`)
       .join("\n");
     throw new Error(
       `Multiple matches for "${input}" — please pick one and pass the JID instead:\n${list}`
@@ -364,10 +369,11 @@ if (allow("chatlytics_search")) {
         return { isError: true, content: [{ type: "text", text: NO_TOKEN_PROMPT }] };
       }
       try {
-        const result = await callApi("POST", "/api/v1/actions", {
-          action: "search",
-          params: { query },
-        });
+        // v2.3.0: search via the local directory index (fast, structured)
+        // rather than POST /api/v1/actions{action:"search"} — the latter does a
+        // live WAHA query that times out for bot tokens. Mirrors resolveChatId.
+        const qs = new URLSearchParams({ search: query, limit: "25" });
+        const result = await callApi("GET", `/api/v1/directory?${qs.toString()}`);
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       } catch (e) {
         return { isError: true, content: [{ type: "text", text: e.message }] };
