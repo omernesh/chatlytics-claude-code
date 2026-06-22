@@ -6,6 +6,20 @@
 
 All notable changes to the Chatlytics Claude Code plugin are documented here.
 
+## [2.4.0] — 2026-06-22
+
+### Added
+
+- **Auto-grant 8h DM access when sending to a non-allow-listed recipient.**
+  `chatlytics_send` now, in bot-token mode for a DM (`@c.us`) target, checks
+  whether the recipient is in the bot's DM allow-list; if not, it creates an 8h
+  time-limited access grant (`POST /api/v1/bot/me/access-grants`) so the
+  recipient's REPLY routes back to this bot's inbox (dm-paired) instead of being
+  dropped — then auto-expires. Without this you could message a new number from
+  Claude Code but never see their answer. The grant also creates the outbound
+  pairing the send needs (INV-09). Best-effort: a grant failure never blocks the
+  send. A one-line note is appended to the send result when a grant is created.
+
 ## [2.3.0] — 2026-06-22
 
 ### Fixed

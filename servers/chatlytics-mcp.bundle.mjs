@@ -21145,7 +21145,7 @@ function clampLongPollTimeout(value) {
   const n = typeof value === "number" && Number.isFinite(value) ? value : DEFAULT_LONGPOLL_TIMEOUT_MS;
   return Math.min(Math.max(MIN_LONGPOLL_TIMEOUT_MS, n), MAX_LONGPOLL_TIMEOUT_MS);
 }
-var server = new McpServer({ name: "chatlytics", version: "2.3.0" });
+var server = new McpServer({ name: "chatlytics", version: "2.4.0" });
 function looksLikeJid(s) {
   if (typeof s !== "string" || s.length === 0) return false;
   return /@(c\.us|g\.us|lid|newsletter)$/i.test(s);
@@ -21199,12 +21199,37 @@ if (allow("chatlytics_send")) {
       }
       try {
         const chatId = await resolveChatId(to);
+        let grantNote = "";
+        if (AUTH_MODE === "bot_token" && chatId.endsWith("@c.us")) {
+          try {
+            const me = await callApi("GET", "/api/v1/bot/me");
+            const dm = me?.access_policy?.dm;
+            const alreadyAllowed = dm?.type === "allow_all" || Array.isArray(dm?.entries) && dm.entries.includes(chatId);
+            if (!alreadyAllowed) {
+              const g = await callApi("POST", "/api/v1/bot/me/access-grants", {
+                jid: chatId,
+                scope: "dm",
+                hours: 8
+              });
+              if (g?.ok) {
+                const until = g.expires_at ? new Date(g.expires_at * 1e3).toISOString() : "~8h";
+                grantNote = `
+
+\u2139\uFE0F ${chatId} wasn't in your allow-list \u2014 granted 8h DM access (until ${until}) so their reply reaches you here. Auto-expires.`;
+              }
+            }
+          } catch (e) {
+            grantNote = `
+
+\u26A0\uFE0F Could not auto-grant DM access (${e.message}); attempting send anyway.`;
+          }
+        }
         const result = await callApi("POST", "/api/v1/send", {
           chatId,
           text,
           session: session || DEFAULT_SESSION || void 0
         });
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) + grantNote }] };
       } catch (e) {
         return { isError: true, content: [{ type: "text", text: e.message }] };
       }

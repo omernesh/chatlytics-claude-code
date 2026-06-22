@@ -203,7 +203,7 @@ function clampLongPollTimeout(value) {
   return Math.min(Math.max(MIN_LONGPOLL_TIMEOUT_MS, n), MAX_LONGPOLL_TIMEOUT_MS);
 }
 
-const server = new McpServer({ name: "chatlytics", version: "2.3.0" });
+const server = new McpServer({ name: "chatlytics", version: "2.4.0" });
 
 // Detect WhatsApp JID-shaped strings. WAHA uses 4 suffix families:
 //   <phone>@c.us           — 1:1 contacts
@@ -314,12 +314,47 @@ if (allow("chatlytics_send")) {
         // source of truth and stays actionable. Bot-token callers are UNAFFECTED —
         // the server pins the session to the bot's own, so `session` is optional.
         const chatId = await resolveChatId(to);
+        // bot-access-grants (v2.4.0) — AUTO-GRANT 8h DM access when sending to a
+        // recipient who is NOT in this bot's DM allow-list, so their REPLY routes
+        // back to this bot's inbox (dm-paired) instead of being dropped. Without
+        // this, you can message a new number from Claude Code but never see their
+        // answer. Bot-token mode + DM (@c.us) only; the grant also creates the
+        // outbound pairing the send needs (INV-09). Auto-expires after 8h. The
+        // probe/grant is best-effort: a failure never blocks the send (the
+        // server's pairing gate stays the source of truth).
+        let grantNote = "";
+        if (AUTH_MODE === "bot_token" && chatId.endsWith("@c.us")) {
+          try {
+            const me = await callApi("GET", "/api/v1/bot/me");
+            const dm = me?.access_policy?.dm;
+            const alreadyAllowed =
+              dm?.type === "allow_all" ||
+              (Array.isArray(dm?.entries) && dm.entries.includes(chatId));
+            if (!alreadyAllowed) {
+              const g = await callApi("POST", "/api/v1/bot/me/access-grants", {
+                jid: chatId,
+                scope: "dm",
+                hours: 8,
+              });
+              if (g?.ok) {
+                const until = g.expires_at
+                  ? new Date(g.expires_at * 1000).toISOString()
+                  : "~8h";
+                grantNote =
+                  `\n\nℹ️ ${chatId} wasn't in your allow-list — granted 8h DM access ` +
+                  `(until ${until}) so their reply reaches you here. Auto-expires.`;
+              }
+            }
+          } catch (e) {
+            grantNote = `\n\n⚠️ Could not auto-grant DM access (${e.message}); attempting send anyway.`;
+          }
+        }
         const result = await callApi("POST", "/api/v1/send", {
           chatId,
           text,
           session: session || DEFAULT_SESSION || undefined,
         });
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) + grantNote }] };
       } catch (e) {
         return { isError: true, content: [{ type: "text", text: e.message }] };
       }
