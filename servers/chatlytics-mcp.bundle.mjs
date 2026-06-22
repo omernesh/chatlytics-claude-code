@@ -21014,7 +21014,8 @@ var StdioServerTransport = class {
 var API_URL = process.env.CHATLYTICS_API_URL || "https://node.chatlytics.ai";
 var BOT_TOKEN = process.env.CHATLYTICS_BOT_TOKEN || "";
 var API_KEY = process.env.CHATLYTICS_API_KEY || "";
-var DEFAULT_SESSION = process.env.CHATLYTICS_SESSION || "";
+var _rawSession = process.env.CHATLYTICS_SESSION || "";
+var DEFAULT_SESSION = _rawSession.startsWith("${") ? "" : _rawSession;
 var AUTH_VALUE = BOT_TOKEN || API_KEY;
 var AUTH_MODE = BOT_TOKEN ? "bot_token" : API_KEY ? "api_key" : "none";
 var NO_TOKEN_PROMPT = [
@@ -21145,7 +21146,7 @@ function clampLongPollTimeout(value) {
   const n = typeof value === "number" && Number.isFinite(value) ? value : DEFAULT_LONGPOLL_TIMEOUT_MS;
   return Math.min(Math.max(MIN_LONGPOLL_TIMEOUT_MS, n), MAX_LONGPOLL_TIMEOUT_MS);
 }
-var server = new McpServer({ name: "chatlytics", version: "2.4.0" });
+var server = new McpServer({ name: "chatlytics", version: "2.4.1" });
 function looksLikeJid(s) {
   if (typeof s !== "string" || s.length === 0) return false;
   return /@(c\.us|g\.us|lid|newsletter)$/i.test(s);

@@ -10,7 +10,12 @@ import { z } from "zod";
 const API_URL = process.env.CHATLYTICS_API_URL || "https://node.chatlytics.ai";
 const BOT_TOKEN = process.env.CHATLYTICS_BOT_TOKEN || "";
 const API_KEY = process.env.CHATLYTICS_API_KEY || "";
-const DEFAULT_SESSION = process.env.CHATLYTICS_SESSION || "";
+// Guard against an unexpanded "${CHATLYTICS_SESSION}" placeholder leaking in from
+// an .mcp.json env mapping when the user hasn't defined CHATLYTICS_SESSION. A value
+// starting with "${" is treated as UNSET — bot tokens are session-pinned server-side,
+// so DEFAULT_SESSION stays "" and the send omits session (server resolves it).
+const _rawSession = process.env.CHATLYTICS_SESSION || "";
+const DEFAULT_SESSION = _rawSession.startsWith("${") ? "" : _rawSession;
 const AUTH_VALUE = BOT_TOKEN || API_KEY;
 const AUTH_MODE = BOT_TOKEN ? "bot_token" : (API_KEY ? "api_key" : "none");
 
@@ -203,7 +208,7 @@ function clampLongPollTimeout(value) {
   return Math.min(Math.max(MIN_LONGPOLL_TIMEOUT_MS, n), MAX_LONGPOLL_TIMEOUT_MS);
 }
 
-const server = new McpServer({ name: "chatlytics", version: "2.4.0" });
+const server = new McpServer({ name: "chatlytics", version: "2.4.1" });
 
 // Detect WhatsApp JID-shaped strings. WAHA uses 4 suffix families:
 //   <phone>@c.us           — 1:1 contacts

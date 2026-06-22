@@ -144,12 +144,15 @@ if you self-host or point at a non-default endpoint:
 
 ```
 # CHATLYTICS_API_URL=https://node.chatlytics.ai   # optional — this is the default
-# CHATLYTICS_SESSION=your-session-id              # optional
 # CHATLYTICS_API_KEY=your-api-key                 # legacy v3.37 fallback (see note)
+# CHATLYTICS_SESSION=your-session-id              # legacy api_key only — leave unset for bot tokens
 ```
 
-The plugin's `.mcp.json` declares all four vars and Claude Code passes
-them through to the MCP server stdio process.
+The plugin's `.mcp.json` passes `CHATLYTICS_API_URL`, `CHATLYTICS_BOT_TOKEN`,
+and `CHATLYTICS_API_KEY` through to the MCP server. `CHATLYTICS_SESSION` is
+**not** injected by the plugin (removed in v2.4.1) — bot-token users never
+need it (the server pins the session server-side); legacy api_key users should
+set it manually in their settings `env` block if needed.
 
 **Note on `CHATLYTICS_API_KEY`:** v3.37 operators using the shared admin
 api_key bearer can keep using it — the plugin falls back to it when

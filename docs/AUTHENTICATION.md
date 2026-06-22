@@ -40,9 +40,12 @@ so Claude Code substitutes your settings values when spawning the MCP server:
 }
 ```
 
-`CHATLYTICS_API_URL` is optional (default `https://node.chatlytics.ai`);
-`CHATLYTICS_SESSION` is optional (bot tokens are session-pinned server-side;
-legacy api_key sends need it).
+`CHATLYTICS_API_URL` is optional (default `https://node.chatlytics.ai`).
+`CHATLYTICS_SESSION` is **not injected by the plugin** — the `.mcp.json`
+env block does not include it (removed in v2.4.1 to prevent a placeholder
+leak). Bot-token users never need it (the server pins the session to the
+bot's own). Legacy api_key users who need it should set it manually in their
+settings `env` block.
 
 Alternatively, the scripted user-scope install
 (`node scripts/install.mjs --token sk_bot_...`) bakes the env vars into the

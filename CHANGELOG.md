@@ -6,6 +6,25 @@
 
 All notable changes to the Chatlytics Claude Code plugin are documented here.
 
+## [2.4.1] — 2026-06-22
+
+### Fixed
+
+- **`CHATLYTICS_SESSION` placeholder leak → 403 `bot_session_mismatch`.**
+  The `.mcp.json` env block previously included
+  `"CHATLYTICS_SESSION": "${CHATLYTICS_SESSION}"`. When the user (correctly)
+  never defined `CHATLYTICS_SESSION`, Claude Code passed the literal unexpanded
+  string `${CHATLYTICS_SESSION}` into the MCP process. The MCP server read it
+  as `DEFAULT_SESSION` and forwarded it to `POST /api/v1/send`, which returned
+  403 `bot_session_mismatch` (the bot token is already session-pinned
+  server-side, so the mismatched literal session was rejected).
+  Two-part fix: (1) removed `CHATLYTICS_SESSION` from the `.mcp.json` env
+  block — bot-token users never need it; legacy api_key users who need it
+  should set it manually in their settings `env` block. (2) added a `${`-guard
+  in `DEFAULT_SESSION` initialization so any stale unexpanded placeholder
+  that leaks in from an older `.mcp.json` is treated as unset rather than
+  forwarded to the API.
+
 ## [2.4.0] — 2026-06-22
 
 ### Added

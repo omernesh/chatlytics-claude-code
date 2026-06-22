@@ -116,8 +116,9 @@ token is the only required var):
 
 `CHATLYTICS_API_URL` is optional — it defaults to
 `https://node.chatlytics.ai` (the hosted API). Set it only if you self-host.
-`CHATLYTICS_SESSION` is optional too: bot tokens are pinned server-side to
-the bot's own session.
+`CHATLYTICS_SESSION` is **not needed for bot tokens** — the server pins the
+session to the bot's own. Do not set it in your settings env for bot-token
+mode; it is only relevant for legacy api_key sends (see below).
 
 For legacy v3.37 setups still on the operator api_key (here the session IS
 needed for sends):
