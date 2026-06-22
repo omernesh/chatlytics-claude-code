@@ -6,6 +6,27 @@
 
 All notable changes to the Chatlytics Claude Code plugin are documented here.
 
+## [2.5.0] — 2026-06-22
+
+### Added
+
+- **WhatsApp inbox daemon bundled into the plugin** (`daemon/`). The plugin now
+  ships three Node scripts (`daemon.mjs`, `ensure-daemon.mjs`, `inject-hook.mjs`)
+  that previously had to be manually placed in `~/.claude/whatsapp-cc/`.
+- **SessionStart hook** (`hooks/hooks.json`) — probes port 7656 and spawns the
+  long-poll daemon as a detached background process if it is not already running.
+  One daemon per machine; idempotent across all Claude Code sessions.
+- **UserPromptSubmit hook** (`hooks/hooks.json`) — reads new lines from
+  `~/.claude/whatsapp-cc/inbox.jsonl` and injects them as `additionalContext`
+  above every prompt. Fail-open: empty inbox or missing spool file is a
+  silent no-op, never blocks a prompt.
+- **4 WhatsApp inbox skills** (`skills/whatsapp/`, `skills/reply-whatsapp/`,
+  `skills/send-whatsapp/`, `skills/react-whatsapp/`) — auto-discovered by
+  Claude Code from the `skills/` directory alongside the existing `chatlytics`
+  skill. No `skills:` manifest key needed.
+- Data path (`~/.claude/whatsapp-cc/`) is unchanged — scripts moved into the
+  plugin, runtime data stays in the user home dir.
+
 ## [2.4.1] — 2026-06-22
 
 ### Fixed

@@ -9,8 +9,8 @@
     {
       "name": "chatlytics",
       "source": "./",
-      "description": "WhatsApp messaging for Claude Code via Chatlytics — 10 MCP tools (send, read, search, dispatch, login, actions, directory, health, poll, configure) + a skill. v2.0 adds Telegram-style bot-token onboarding + long-poll inbound.",
-      "version": "2.4.1",
+      "description": "WhatsApp messaging for Claude Code via Chatlytics — 10 MCP tools (send, read, search, dispatch, login, actions, directory, health, poll, configure) + a skill + passive WhatsApp inbox (background daemon + skills: /whatsapp, /reply-whatsapp, /send-whatsapp, /react-whatsapp). v2.5 auto-starts a background long-poll daemon on session launch so inbound messages surface passively on your next prompt.",
+      "version": "2.5.0",
       "author": {
         "name": "Chatlytics",
         "url": "https://chatlytics.ai"

@@ -199,7 +199,47 @@ Open WhatsApp on your phone and verify the message landed.
 
 ---
 
-## 8. Going further
+## 8. WhatsApp inbox — passive inbound delivery
+
+Installing the plugin ships a **background long-poll daemon** that surfaces incoming
+WhatsApp messages passively into every Claude Code session — no polling loop, no extra
+setup.
+
+**How it works:**
+
+1. When Claude Code starts, a `SessionStart` hook runs `daemon/ensure-daemon.mjs`. It
+   probes port 7656; if no daemon is listening it spawns one as a detached background
+   process. One daemon per machine, shared across all sessions.
+2. The daemon long-polls `GET /api/v1/bot/updates` (~55s cycles, ~1 req/min idle) and
+   appends new envelopes to `~/.claude/whatsapp-cc/inbox.jsonl`.
+3. On every prompt you submit, a `UserPromptSubmit` hook runs `inject-hook.mjs`. It
+   reads any new inbox lines and injects them as context above your prompt text — so
+   you see incoming messages without running any command. Fail-open: a missing spool
+   file or empty inbox is a silent no-op, never blocks a prompt.
+
+**Companion skills** (auto-discovered — no configuration):
+
+| Skill | When to use |
+|-------|-------------|
+| `/whatsapp` | Manually review recent inbox or check daemon status |
+| `/reply-whatsapp <text>` | Reply to the most recent inbound message |
+| `/reply-whatsapp <contact> <text>` | Reply to a specific contact's last message |
+| `/send-whatsapp <contact> <text>` | Start a new outbound conversation |
+| `/react-whatsapp <emoji>` | React to the most recent message |
+| `/react-whatsapp <contact> <emoji>` | React to a specific contact's last message |
+
+**Requirements:** `CHATLYTICS_BOT_TOKEN` (already set in step 4). The daemon uses
+the bot long-poll endpoint — it needs the same token the MCP tools use.
+
+**Data location:** `~/.claude/whatsapp-cc/` — inbox.jsonl, state.json, cursor.json,
+read-state.json. The scripts ship inside the plugin; your data stays in your home dir.
+
+**Edit display:** the inject-hook suppresses placeholder text and marks cross-turn
+edits with a visual indicator inline.
+
+---
+
+## 9. Going further
 
 The plugin ships **10 MCP tools**:
 

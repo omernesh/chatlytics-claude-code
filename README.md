@@ -13,12 +13,42 @@ The plugin ships:
   `chatlytics_login`, `chatlytics_dispatch`, `chatlytics_poll`,
   `chatlytics_configure`.
 - **A skill** that teaches Claude Code when and how to use WhatsApp.
+- **WhatsApp inbox** — passive inbound delivery via a background long-poll
+  daemon + 4 companion skills (`/whatsapp`, `/reply-whatsapp`, `/send-whatsapp`,
+  `/react-whatsapp`) + two Claude Code hooks (SessionStart launcher,
+  UserPromptSubmit injector).
 
 > **New here? Read [QUICKSTART.md](./QUICKSTART.md) — first WhatsApp message from Claude Code in under 5 minutes.**
 
 **Docs:** [Tool reference](./docs/TOOLS.md) ·
 [Authentication & scoping](./docs/AUTHENTICATION.md) ·
 [Troubleshooting](./docs/TROUBLESHOOTING.md)
+
+## What's new in v2.5.0 — WhatsApp inbox
+
+Installing the plugin now auto-starts a **background long-poll daemon** (singleton,
+~1 req/min idle) that surfaces inbound WhatsApp messages passively into any Claude
+Code session — no manual polling, no slash command needed.
+
+- **SessionStart hook** — runs `daemon/ensure-daemon.mjs` at session launch. It
+  probes port 7656; if the daemon is not running it spawns `daemon/daemon.mjs`
+  as a detached background process. One daemon per machine, shared across sessions.
+- **UserPromptSubmit hook** — runs `daemon/inject-hook.mjs` on every prompt. It
+  reads any new lines from `~/.claude/whatsapp-cc/inbox.jsonl` and prepends them
+  as `additionalContext` so incoming messages appear above your prompt text.
+  Fail-open: a missing spool file or empty inbox is a silent no-op.
+- **4 companion skills** auto-discovered from `skills/`:
+  - `/whatsapp` — manual inbox review + daemon status
+  - `/reply-whatsapp` — reply to a contact by name or to the last message
+  - `/send-whatsapp` — start a new outbound conversation
+  - `/react-whatsapp` — add an emoji reaction to a message
+- **Data lives in `~/.claude/whatsapp-cc/`** (inbox.jsonl, state.json, cursor.json,
+  read-state.json). Scripts ship inside the plugin; data stays in your home dir.
+- **Requires `CHATLYTICS_BOT_TOKEN`** — same token you already set for the MCP tools.
+  The daemon uses the bot's long-poll endpoint (`GET /api/v1/bot/updates`).
+- **Edit display** — the inject-hook uses replace-in-place for cross-turn edits
+  (placeholder suppressed; edits appear inline). New messages arrive as a new
+  context block on the next prompt.
 
 ## What's new in v2.2.0
 

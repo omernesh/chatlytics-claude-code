@@ -3,12 +3,13 @@
 > Submission steps for getting `chatlytics-claude-code` listed in the
 > `anthropics/claude-plugins-official` marketplace.
 
-**Status as of 2026-06-11:** Plugin is v2.2.0, tagged + pushed. v1.1.2 was
+**Status as of 2026-06-22:** Plugin is v2.5.0, tagged + pushed. v1.1.2 was
 live-verified end-to-end (real WhatsApp send from Claude Code, 2026-05-16);
-the v2.x line adds bot-token auth, long-poll inbound, bot self-config, and a
-scripted user-scope installer. Ready to submit. The submission step requires
-a web form (PRs from non-Anthropic authors are auto-closed by the marketplace
-repo's CI).
+the v2.x line adds bot-token auth, long-poll inbound, bot self-config, a
+scripted user-scope installer, and (v2.5.0) a bundled passive WhatsApp inbox
+(background daemon + 4 skills + SessionStart/UserPromptSubmit hooks). Ready to
+submit. The submission step requires a web form (PRs from non-Anthropic authors
+are auto-closed by the marketplace repo's CI).
 
 ## Submit
 
@@ -45,8 +46,20 @@ repo's CI).
 
 ## Why this should pass automated review
 
-- **Narrow MCP scope** — no Claude Code hooks, no PostToolUse, no shell
-  execution
+- **Two Claude Code hooks, both auditable and fail-open:**
+  - `SessionStart` — probes `127.0.0.1:7656` (a localhost port); if nothing
+    answers, spawns a detached `node` process running the bundled
+    `daemon/ensure-daemon.mjs → daemon/daemon.mjs`. No arbitrary shell exec;
+    the script path is the plugin's own `${CLAUDE_PLUGIN_ROOT}/daemon/` dir.
+    All network I/O is the chatlytics bot long-poll over the user-configured
+    `CHATLYTICS_API_URL` — the same endpoint the existing `chatlytics_poll`
+    MCP tool uses.
+  - `UserPromptSubmit` — reads `~/.claude/whatsapp-cc/inbox.jsonl` (a local
+    spool file written by the daemon) and emits `additionalContext` lines.
+    Fail-open: missing file or empty spool is a silent no-op; the hook never
+    blocks a prompt. No outbound network calls.
+  Both scripts are committed, auditable plain-JS in `daemon/`; no eval,
+  no arbitrary shell, no telemetry beyond the user's own Chatlytics endpoint.
 - **BYO telemetry** — the MCP server only POSTs to the user's own Chatlytics
   instance (URL + API key configured by the user in `~/.claude/settings.json`)
 - **Honest description** — README + QUICKSTART describe behavior accurately,

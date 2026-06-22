@@ -1,0 +1,19 @@
+{
+  "description": "WhatsApp inbox: background long-poll daemon (SessionStart) + passive message surfacing (UserPromptSubmit). Reads CHATLYTICS_BOT_TOKEN; data lives in ~/.claude/whatsapp-cc/.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/daemon/ensure-daemon.mjs\"", "timeout": 10 }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/daemon/inject-hook.mjs\"", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}

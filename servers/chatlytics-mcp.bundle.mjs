@@ -21146,7 +21146,7 @@ function clampLongPollTimeout(value) {
   const n = typeof value === "number" && Number.isFinite(value) ? value : DEFAULT_LONGPOLL_TIMEOUT_MS;
   return Math.min(Math.max(MIN_LONGPOLL_TIMEOUT_MS, n), MAX_LONGPOLL_TIMEOUT_MS);
 }
-var server = new McpServer({ name: "chatlytics", version: "2.4.1" });
+var server = new McpServer({ name: "chatlytics", version: "2.5.0" });
 function looksLikeJid(s) {
   if (typeof s !== "string" || s.length === 0) return false;
   return /@(c\.us|g\.us|lid|newsletter)$/i.test(s);
