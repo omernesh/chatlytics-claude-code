@@ -6,6 +6,38 @@
 
 All notable changes to the Chatlytics Claude Code plugin are documented here.
 
+## [2.5.1] — 2026-06-24
+
+### Changed
+
+- **`/send-whatsapp` is now fire-and-forget.** The skill sends once via
+  `chatlytics_send({ to, text })` (no `session` — the bot token pins it
+  server-side), confirms with a single `✅ Sent to <name>: "<message>"` line,
+  and **stops**. It explicitly must NOT call `chatlytics_poll` or wait for the
+  reply: the reply arrives passively via the background inbox daemon. (Polling
+  directly would drain envelopes the daemon owns, silently losing messages.)
+- **Passive inbox lines read like a chat.** The UserPromptSubmit inject-hook
+  now renders inbound messages as `whatsapp message from <name>: <text>` (and
+  `whatsapp message from <name> in <group>: <text>` for groups) instead of the
+  old `<number> [dm]: …` shape. `<name>`/`<group>` use the daemon-resolved
+  `sender_name`/`chat_name`; unresolved senders fall back to the number as
+  before. The UNTRUSTED-DATA security wrapper, ✏️ "(edited)" replace-in-place,
+  burst-collapse, muting, lockfile, and fail-open behavior are all preserved.
+
+### Added
+
+- **Background cached name resolution in the daemon.** Before appending each
+  envelope, the daemon best-effort resolves the sender's (and a group's)
+  display name and stamps `sender_name` / `chat_name` onto the envelope.
+  Resolution uses `GET /api/v1/directory?search=<localpart>` (direct for
+  `@c.us` / `@g.us`); for `@lid` senders it fetches one message to read the
+  phone-form `remoteJidAlt`, directory-searches that phone, and falls back to
+  the message `pushName`. Results (positive and negative) are cached on disk in
+  `~/.claude/whatsapp-cc/names.json` with a 1h TTL (10m for negatives), bounded
+  to 1000 entries. Every lookup is wrapped in try/catch with a 5s fetch timeout
+  so name resolution can never block or crash the poll loop — an unresolved JID
+  simply appends without a name and the hook shows the number.
+
 ## [2.5.0] — 2026-06-22
 
 ### Added

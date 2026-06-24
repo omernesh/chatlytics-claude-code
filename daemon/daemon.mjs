@@ -31,6 +31,7 @@ const LOG_FILE     = path.join(DIR, 'daemon.log');
 const CONFIG_FILE  = path.join(DIR, 'config.json');   // read-only for daemon
 const SEEN_FILE    = path.join(DIR, 'seen.json');
 const READ_STATE_FILE = path.join(DIR, 'read-state.json');
+const NAMES_FILE   = path.join(DIR, 'names.json');     // resolved-name cache
 
 const SINGLETON_PORT = 7656;
 const SINGLETON_HOST = '127.0.0.1';
@@ -44,6 +45,10 @@ const POLL_TIMEOUT    = 55_000;          // server hold time
 const FETCH_TIMEOUT   = 60_000;          // AbortSignal — must exceed POLL_TIMEOUT
 const SEEN_MAX        = 500;
 const INBOX_MAX_BYTES = 5 * 1024 * 1024;
+const NAME_TTL_MS     = 60 * 60 * 1000;  // 1h — re-resolve names at most hourly
+const NAME_CACHE_MAX  = 1000;            // bound the on-disk name cache
+const NAME_FETCH_TIMEOUT = 5_000;        // per-request cap; resolution is best-effort
+const NAME_NEGATIVE_TTL_MS = 10 * 60 * 1000; // remember "no name" for 10m to skip refetch
 
 // ─── Logging ─────────────────────────────────────────────────────────────────
 
@@ -209,6 +214,188 @@ function appendInbox(envelope) {
   }
 }
 
+// ─── Name resolution (best-effort, cached, fail-open) ─────────────────────────
+//
+// Stamps `sender_name` (and for groups `chat_name`) onto the envelope BEFORE
+// appendInbox so the inject-hook can render "whatsapp message from <name>".
+//
+// Resolution is NEVER allowed to block or crash the poll loop:
+//   • every fetch has a short AbortSignal timeout (NAME_FETCH_TIMEOUT)
+//   • everything is wrapped in try/catch — any failure → no name stamped
+//   • results (including negative "no name found") are cached on disk with a TTL
+//     so we don't refetch the same JID for every message.
+//
+// Endpoints used (probed live against the bot token, 2026-06-24):
+//   GET /api/v1/directory?search=<numeric-localpart>
+//        → {contacts:[{jid, displayName, isGroup}], ...}. Works directly for
+//          @c.us DM senders and @g.us groups (search by the numeric local part,
+//          match the row whose jid === the queried jid).
+//   GET /api/v1/messages?chatId=<lid>&limit=1
+//        → [{_data:{key:{remoteJidAlt:"<phone>@s.whatsapp.net"}, pushName}}].
+//          @lid senders are NOT in the directory under their LID, so we fetch one
+//          message to learn the phone-form alt JID, then directory-search that
+//          phone. pushName is the final fallback if the directory has no name.
+
+const nameCache = new Map();   // jid → { name: string|null, ts: number }
+let nameCacheDirty = false;
+
+function loadNameCache() {
+  try {
+    const raw = fs.readFileSync(NAMES_FILE, 'utf8');
+    const obj = JSON.parse(raw);
+    if (obj && typeof obj === 'object') {
+      for (const [jid, entry] of Object.entries(obj)) {
+        if (entry && typeof entry.ts === 'number') {
+          nameCache.set(jid, { name: entry.name ?? null, ts: entry.ts });
+        }
+      }
+    }
+  } catch {
+    // Missing/corrupt cache → start empty (fail-open)
+  }
+}
+
+function saveNameCache() {
+  if (!nameCacheDirty) return;
+  try {
+    // Bound the cache: keep the most-recently-stamped NAME_CACHE_MAX entries.
+    let entries = Array.from(nameCache.entries());
+    if (entries.length > NAME_CACHE_MAX) {
+      entries.sort((a, b) => b[1].ts - a[1].ts);
+      entries = entries.slice(0, NAME_CACHE_MAX);
+      nameCache.clear();
+      for (const [jid, entry] of entries) nameCache.set(jid, entry);
+    }
+    const obj = {};
+    for (const [jid, entry] of entries) obj[jid] = entry;
+    fs.writeFileSync(NAMES_FILE, JSON.stringify(obj) + '\n');
+    nameCacheDirty = false;
+  } catch (err) {
+    log(`WARN: could not save names.json: ${err.message}`);
+  }
+}
+
+/** Cache lookup honoring positive (NAME_TTL_MS) and negative (NAME_NEGATIVE_TTL_MS) TTLs. */
+function cachedName(jid) {
+  const entry = nameCache.get(jid);
+  if (!entry) return undefined;            // unknown → caller should resolve
+  const age = Date.now() - entry.ts;
+  const ttl = entry.name ? NAME_TTL_MS : NAME_NEGATIVE_TTL_MS;
+  if (age > ttl) return undefined;          // stale → re-resolve
+  return entry.name;                        // string OR null (cached negative)
+}
+
+function putName(jid, name) {
+  nameCache.set(jid, { name: name ?? null, ts: Date.now() });
+  nameCacheDirty = true;
+}
+
+/** Numeric local part of a JID, e.g. "972555713995@c.us" → "972555713995". */
+function localPart(jid) {
+  if (!jid || typeof jid !== 'string') return '';
+  const at = jid.indexOf('@');
+  return at > 0 ? jid.slice(0, at) : jid;
+}
+
+async function fetchJson(url, token) {
+  const res = await fetch(url, {
+    headers: { 'Authorization': `Bearer ${token}` },
+    signal: AbortSignal.timeout(NAME_FETCH_TIMEOUT),
+  });
+  if (!res.ok) return null;
+  return await res.json();
+}
+
+/** Directory search by the numeric local part; return the displayName of the row
+ *  whose jid matches `wantJid` (preferred) or the sole exact-localpart row. */
+async function directoryName(jid, apiUrl, token) {
+  const lp = localPart(jid);
+  if (!lp) return null;
+  const url = `${apiUrl}/api/v1/directory?search=${encodeURIComponent(lp)}`;
+  const data = await fetchJson(url, token);
+  const rows = data && Array.isArray(data.contacts) ? data.contacts : [];
+  if (rows.length === 0) return null;
+  // Prefer an exact jid match.
+  const exact = rows.find(r => r && r.jid === jid);
+  if (exact && exact.displayName) return String(exact.displayName);
+  // Else a row whose local part matches exactly (handles @lid→@c.us phone hop).
+  const lpMatch = rows.find(r => r && localPart(r.jid) === lp && r.displayName);
+  if (lpMatch) return String(lpMatch.displayName);
+  return null;
+}
+
+/**
+ * Resolve a human display name for a JID. Returns a string or null.
+ * Strategy:
+ *   1. directory search by local part (works for @c.us / @g.us)
+ *   2. for @lid: fetch one message → remoteJidAlt phone → directory search;
+ *      fall back to that message's pushName.
+ * Cached (positive + negative). Best-effort: any error → null.
+ */
+async function resolveName(jid, apiUrl, token) {
+  if (!jid || typeof jid !== 'string') return null;
+  const hit = cachedName(jid);
+  if (hit !== undefined) return hit;   // cached string or cached null
+
+  let name = null;
+  try {
+    name = await directoryName(jid, apiUrl, token);
+
+    if (!name && jid.endsWith('@lid')) {
+      // LID is not directly in the directory — learn its phone-form alt JID and
+      // its pushName from a single recent message.
+      const msgs = await fetchJson(
+        `${apiUrl}/api/v1/messages?chatId=${encodeURIComponent(jid)}&limit=1`,
+        token,
+      );
+      const m = Array.isArray(msgs) && msgs.length ? msgs[0] : null;
+      const altRaw = m?._data?.key?.remoteJidAlt ?? '';
+      const pushName = typeof m?._data?.pushName === 'string' ? m._data.pushName.trim() : '';
+      if (altRaw) {
+        // "<phone>@s.whatsapp.net" → "<phone>@c.us"
+        const phone = localPart(altRaw);
+        if (phone) {
+          name = await directoryName(`${phone}@c.us`, apiUrl, token);
+        }
+      }
+      // pushName is the WhatsApp profile name — a reasonable fallback, but skip
+      // values that look like an internal session id (e.g. "3cf11776_logan").
+      if (!name && pushName && !/^[0-9a-f]{6,}_/i.test(pushName)) {
+        name = pushName;
+      }
+    }
+  } catch {
+    // network/parse/timeout → leave name null (envelope appended without a name)
+    name = null;
+  }
+
+  putName(jid, name);
+  return name;
+}
+
+/**
+ * Mutate `envelope` in place, stamping sender_name (+ chat_name for groups).
+ * Wrapped so it can NEVER throw into the poll loop.
+ */
+async function stampNames(envelope, apiUrl, token) {
+  try {
+    const senderJid = envelope.sender_jid ?? null;
+    if (senderJid) {
+      const sn = await resolveName(senderJid, apiUrl, token);
+      if (sn) envelope.sender_name = sn;
+    }
+    if (envelope.chat_type === 'group') {
+      const groupJid = envelope.entity_jid ?? null;
+      if (groupJid) {
+        const cn = await resolveName(groupJid, apiUrl, token);
+        if (cn) envelope.chat_name = cn;
+      }
+    }
+  } catch {
+    // best-effort — never block/crash the loop
+  }
+}
+
 // ─── Inbox compaction (D8) ────────────────────────────────────────────────────
 
 function maybeCompactInbox() {
@@ -282,6 +469,7 @@ async function pollLoop(token, apiUrl) {
   let lastAckWarnAt = 0;
   let seenIds     = loadSeen();
   const seenSet   = new Set(seenIds);
+  loadNameCache();
 
   log(`Poll loop starting. API: ${apiUrl}. Cursor: ${cursor ? cursor.slice(0, 20) + '…' : 'none'}`);
 
@@ -345,6 +533,11 @@ async function pollLoop(token, apiUrl) {
             continue;
           }
 
+          // Best-effort: stamp sender_name / chat_name BEFORE append so the
+          // inject-hook can render "whatsapp message from <name>". Never throws
+          // (cached + short-timeout + try/catch inside).
+          await stampNames(envelope, apiUrl, token);
+
           const ok = appendInbox(envelope);
           if (!ok) {
             log(`ERROR: failed to append envelope to inbox (message_id=${msgId ?? 'unknown'}). Will not advance cursor.`);
@@ -371,6 +564,7 @@ async function pollLoop(token, apiUrl) {
 
         if (anyProcessed) {
           saveSeen(seenIds);
+          saveNameCache();
         }
 
         if (allAppended) {

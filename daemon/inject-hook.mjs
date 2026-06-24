@@ -244,32 +244,37 @@ function mainLocked() {
   }
 
   // ── Render ───────────────────────────────────────────────────────────────────
+  // Output template (agreed UX):
+  //   DM:    whatsapp message from <name>: <message>
+  //   group: whatsapp message from <name> in <group>: <message>
+  // <name> uses env.sender_name (resolved by the daemon) when present, else the
+  // existing number formatting (strip @suffix). <group> uses env.chat_name.
   const renderLines = [];
   for (const group of groups) {
     const { sender, items } = group;
-    const displaySender = formatSender(sender);
+    // Prefer the daemon-resolved display name; fall back to the formatted JID.
+    const displaySender = senderLabel(items[0]?.env, sender);
 
     // An ✏️-edit group is always a singleton (see grouping above).
     if (items[0]?.renderEdit) {
       const env       = items[0].env;
       const cleanText = cleanDisplayText(env.text ?? '');
       const preview   = cleanText.slice(0, 300);
-      renderLines.push(`✏️ ${displaySender} (edited): "${preview}"`);
+      renderLines.push(`✏️ ${origin(env, displaySender)} (edited): "${preview}"`);
     } else if (items.length > collapseBurstThreshold) {
       // Collapse: show latest
       const latestItem = items[items.length - 1];
       const cleanText  = cleanDisplayText(latestItem.env.text ?? '');
       const preview    = cleanText.slice(0, 300).replace(/\n/g, ' ');
       renderLines.push(
-        `${displaySender} sent ${items.length} messages (showing latest): "${preview}"`
+        `whatsapp ${items.length} messages from ${origin(latestItem.env, displaySender)} (showing latest): "${preview}"`
       );
     } else {
       for (const item of items) {
         const env       = item.env;
-        const chatType  = env.chat_type ?? 'dm';
         const cleanText = cleanDisplayText(env.text ?? '');
         const preview   = cleanText.slice(0, 300);
-        renderLines.push(`${displaySender} [${chatType}]: "${preview}"`);
+        renderLines.push(`whatsapp message from ${origin(env, displaySender)}: "${preview}"`);
       }
     }
   }
@@ -330,6 +335,32 @@ function formatSender(jid) {
   const atIdx = jid.indexOf('@');
   if (atIdx > 0) return jid.slice(0, atIdx);
   return jid;
+}
+
+/**
+ * Human label for the message SENDER. Prefers the daemon-resolved
+ * `env.sender_name`; falls back to the number-formatted JID.
+ */
+function senderLabel(env, senderJid) {
+  const name = env && typeof env.sender_name === 'string' ? env.sender_name.trim() : '';
+  if (name) return name;
+  return formatSender(senderJid);
+}
+
+/**
+ * Build the "<name>" or "<name> in <group>" origin fragment for one message.
+ * Group name comes from the daemon-resolved `env.chat_name`; when absent for a
+ * group chat we fall back to the formatted group JID so the " in <group>" suffix
+ * still carries some signal. DMs never get an " in …" suffix.
+ */
+function origin(env, displaySender) {
+  if (env && env.chat_type === 'group') {
+    const gName = typeof env.chat_name === 'string' && env.chat_name.trim()
+      ? env.chat_name.trim()
+      : formatSender(env.entity_jid ?? '');
+    if (gName && gName !== 'unknown') return `${displaySender} in ${gName}`;
+  }
+  return displaySender;
 }
 
 /**

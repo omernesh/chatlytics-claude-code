@@ -1,6 +1,6 @@
 {
   "name": "chatlytics-claude-code",
-  "version": "2.5.0",
+  "version": "2.5.1",
   "private": true,
   "description": "Chatlytics Claude Code plugin — MCP server + skill for WhatsApp via Chatlytics REST API",
   "license": "MIT",

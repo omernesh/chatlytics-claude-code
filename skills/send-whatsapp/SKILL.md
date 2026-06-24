@@ -17,17 +17,31 @@ Splitting name from message: a contact name is usually 1–3 words. Prefer match
 
 If the recipient is ambiguous (multiple matches) or not found, ask the user to clarify rather than sending to the wrong chat. Phone numbers (e.g. `+972…`) can be passed straight through as `to`.
 
-## Send
+## Send (once — fire-and-forget)
+
+Call `chatlytics_send` EXACTLY ONCE:
 
 ```
 chatlytics_send({ to: <contact name | phone | chatJid>, text: <message> })
 ```
-Omit `session` to use the default session, unless the user specified an account. chatlytics fuzzy-resolves names → JIDs.
+Do NOT pass `session` — the bot token pins the session server-side. chatlytics fuzzy-resolves names → JIDs.
 
-## Confirm
+## Confirm, then STOP
 
-One line: `✅ Sent to <name>: "<message>"`. Report send errors plainly (don't swallow). If auth fails, point to the chatlytics MCP token setup.
+Reply with ONE line and end your turn:
+
+`✅ Sent to <name>: "<message>"`
+
+Report send errors plainly (don't swallow). If auth fails, point to the chatlytics MCP token setup.
+
+> **STOP after the confirmation. This is fire-and-forget.**
+> Do **NOT** call `chatlytics_poll`. Do **NOT** wait for, fetch, or poll for the reply.
+> The reply arrives on its own, **passively**, via the background inbox daemon — it
+> will appear above a later prompt as `whatsapp message from <name>: …`. The daemon
+> owns the long-poll queue; if the assistant polls it directly it would DRAIN
+> envelopes the daemon is supposed to surface, so the user would silently lose
+> messages. Never poll. Just send, confirm, and stop.
 
 ## Example
-- `/send-whatsapp dana call you in 10` → new message to Dana.
+- `/send-whatsapp dana call you in 10` → new message to Dana. → `✅ Sent to Dana: "call you in 10"` then stop.
 - `/send-whatsapp +972544329000 hey` → new message to that number.
