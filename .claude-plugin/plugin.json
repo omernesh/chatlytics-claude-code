@@ -1,6 +1,6 @@
 {
   "name": "chatlytics",
-  "version": "2.5.2",
+  "version": "2.6.0",
   "description": "WhatsApp messaging for Claude Code via Chatlytics",
   "author": {
     "name": "Chatlytics",

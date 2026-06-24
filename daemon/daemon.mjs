@@ -19,6 +19,7 @@ import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
 import os from 'os';
+import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 
 // ─── Paths ────────────────────────────────────────────────────────────────────
@@ -107,6 +108,182 @@ function resolveConfig() {
   apiUrl = apiUrl.replace(/\/+$/, '');
 
   return { token, apiUrl };
+}
+
+/**
+ * Read the optional notify config from config.json (read-only for the daemon).
+ * Shape: { notify: { enabled: bool, ntfyUrl: string|null } }. Defaults: enabled=true,
+ * ntfyUrl=null. Always returns a sane object — never throws.
+ */
+function readNotifyConfig() {
+  const fallback = { enabled: true, ntfyUrl: null };
+  try {
+    const raw = fs.readFileSync(CONFIG_FILE, 'utf8');
+    const obj = JSON.parse(raw);
+    const n = obj && typeof obj === 'object' ? obj.notify : null;
+    if (!n || typeof n !== 'object') return fallback;
+    const enabled = n.enabled === false ? false : true;   // default true
+    const ntfyUrl = (typeof n.ntfyUrl === 'string' && n.ntfyUrl.trim()) ? n.ntfyUrl.trim() : null;
+    return { enabled, ntfyUrl };
+  } catch {
+    return fallback;
+  }
+}
+
+// ─── Desktop notifications (FEATURE 1 — fail-open, never blocks the poll loop) ──
+//
+// notify(title, body) shows a Windows toast via a DETACHED PowerShell process so
+// it never blocks. Untrusted WhatsApp text reaches the body, so the PS payload is
+// passed via -EncodedCommand (base64-UTF16LE) — the text NEVER touches the command
+// line as literal characters and cannot break quoting or execute. The PS script
+// itself reads the title/body from environment variables (CCWA_TITLE / CCWA_BODY),
+// belt-and-suspenders against any injection.
+//
+// Three fallbacks, each tried in order inside the spawned PS process:
+//   1. BurntToast  (New-BurntToastNotification) — if the module imports.
+//   2. WinRT toast ([Windows.UI.Notifications.ToastNotificationManager]) with the
+//      PowerShell AppId.
+//   3. NotifyIcon balloon tip (System.Windows.Forms).
+// Any failure is swallowed. The whole thing is best-effort.
+
+const TOAST_PS_SCRIPT = String.raw`
+$ErrorActionPreference = 'SilentlyContinue'
+$title = $env:CCWA_TITLE
+$body  = $env:CCWA_BODY
+if (-not $title) { $title = 'WhatsApp' }
+if (-not $body)  { $body  = '' }
+
+function Show-BurntToast {
+  Import-Module BurntToast -ErrorAction Stop
+  New-BurntToastNotification -Text $title, $body -ErrorAction Stop
+  return $true
+}
+
+function Show-WinRT {
+  [void][Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+  [void][Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime]
+  [void][Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime]
+  $appId = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+  $tpl = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
+  $texts = $tpl.GetElementsByTagName('text')
+  $texts.Item(0).AppendChild($tpl.CreateTextNode($title)) | Out-Null
+  $texts.Item(1).AppendChild($tpl.CreateTextNode($body)) | Out-Null
+  $toast = [Windows.UI.Notifications.ToastNotification]::new($tpl)
+  [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId).Show($toast)
+  return $true
+}
+
+function Show-Balloon {
+  Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+  Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+  $ni = New-Object System.Windows.Forms.NotifyIcon
+  $ni.Icon = [System.Drawing.SystemIcons]::Information
+  $ni.BalloonTipTitle = $title
+  $ni.BalloonTipText  = $body
+  $ni.Visible = $true
+  $ni.ShowBalloonTip(8000)
+  Start-Sleep -Milliseconds 9000
+  $ni.Dispose()
+  return $true
+}
+
+$ok = $false
+try { $ok = Show-BurntToast } catch { $ok = $false }
+if (-not $ok) { try { $ok = Show-WinRT } catch { $ok = $false } }
+if (-not $ok) { try { $ok = Show-Balloon } catch { $ok = $false } }
+`;
+
+let cachedEncodedToastCommand = null;
+function encodedToastCommand() {
+  if (cachedEncodedToastCommand) return cachedEncodedToastCommand;
+  cachedEncodedToastCommand = Buffer.from(TOAST_PS_SCRIPT, 'utf16le').toString('base64');
+  return cachedEncodedToastCommand;
+}
+
+/**
+ * Fire a Windows desktop toast for (title, body). Detached + best-effort: any
+ * failure is swallowed so the poll loop is never blocked or crashed.
+ * Title/body are passed via env vars — untrusted text never reaches the command line.
+ */
+function notify(title, body) {
+  try {
+    const child = spawn(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedToastCommand()],
+      {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+        env: {
+          ...process.env,
+          CCWA_TITLE: String(title ?? 'WhatsApp'),
+          CCWA_BODY:  String(body ?? ''),
+        },
+      },
+    );
+    child.on('error', () => { /* swallow — fail-open */ });
+    child.unref();
+  } catch {
+    // never let a toast failure touch the poll loop
+  }
+}
+
+/**
+ * Best-effort POST to an ntfy URL with a Title header. Untrusted text goes in the
+ * BODY (not a header) so it cannot inject extra headers. Swallows all errors.
+ */
+function notifyNtfy(ntfyUrl, title, body) {
+  try {
+    if (!ntfyUrl || typeof ntfyUrl !== 'string') return;
+    // ntfy Title header must be a single line; collapse + ASCII-ish for safety.
+    const safeTitle = String(title ?? 'WhatsApp').replace(/[\r\n]+/g, ' ').slice(0, 200);
+    fetch(ntfyUrl, {
+      method: 'POST',
+      headers: { 'Title': safeTitle },
+      body: String(body ?? ''),
+      signal: AbortSignal.timeout(10_000),
+    }).catch(() => { /* swallow */ });
+  } catch {
+    // fail-open
+  }
+}
+
+/**
+ * Build the (title, body) a new inbound envelope should surface.
+ * title: "WhatsApp · <sender>" plus " in <group>" for groups.
+ * body:  security-stripped text preview, newlines collapsed, ~180 chars.
+ */
+function buildNotification(env) {
+  const sender = (env.sender_name && String(env.sender_name).trim())
+    || localPart(env.sender_jid ?? '')
+    || 'WhatsApp';
+  let title = `WhatsApp · ${sender}`;
+  if (env.chat_type === 'group') {
+    const grp = (env.chat_name && String(env.chat_name).trim())
+      || localPart(env.entity_jid ?? '')
+      || 'group';
+    title += ` in ${grp}`;
+  }
+  const cleaned = cleanSecurityPreview(env.text ?? '');
+  const collapsed = cleaned.replace(/\s+/g, ' ').trim();
+  const body = collapsed.length > 180 ? collapsed.slice(0, 179) + '…' : collapsed;
+  return { title, body };
+}
+
+/**
+ * Strip the leading [SECURITY: …] framing line(s) before previewing — same rule the
+ * inject-hook uses (cleanDisplayText). Best-effort.
+ */
+function cleanSecurityPreview(text) {
+  try {
+    if (!text) return '';
+    const lines = String(text).split('\n');
+    let i = 0;
+    while (i < lines.length && lines[i].trimStart().startsWith('[SECURITY:')) i++;
+    return lines.slice(i).join('\n').trim();
+  } catch {
+    return '';
+  }
 }
 
 // ─── Singleton port guard ────────────────────────────────────────────────────
@@ -471,6 +648,12 @@ async function pollLoop(token, apiUrl) {
   const seenSet   = new Set(seenIds);
   loadNameCache();
 
+  // FEATURE 1: notifications. `firstCycle` guards the startup backlog flush — the
+  // first poll after daemon start never dumps a pile of toasts (it summarizes if
+  // large). After the first cycle, normal live notifications apply.
+  let firstCycle = true;
+  const NOTIFY_CAP = 5;
+
   log(`Poll loop starting. API: ${apiUrl}. Cursor: ${cursor ? cursor.slice(0, 20) + '…' : 'none'}`);
 
   // eslint-disable-next-line no-constant-condition
@@ -516,6 +699,7 @@ async function pollLoop(token, apiUrl) {
         const state = loadState();
         let allAppended = true;
         let anyProcessed = false;
+        const appendedThisBatch = [];   // FEATURE 1: newly-appended inbounds to notify
 
         for (const envelope of envelopes) {
           const msgId = envelope.message_id ?? null;
@@ -559,6 +743,7 @@ async function pollLoop(token, apiUrl) {
             // Prepend to recent, keep last 20
             state.recent = [summary, ...(state.recent ?? [])].slice(0, RECENT_MAX);
             anyProcessed = true;
+            appendedThisBatch.push(envelope);
           }
         }
 
@@ -566,6 +751,32 @@ async function pollLoop(token, apiUrl) {
           saveSeen(seenIds);
           saveNameCache();
         }
+
+        // FEATURE 1: desktop push for newly-appended inbounds. Best-effort,
+        // fail-open, never blocks. Skip the startup backlog flush (firstCycle).
+        try {
+          if (!firstCycle && appendedThisBatch.length > 0) {
+            const cfg = readNotifyConfig();
+            if (cfg.enabled) {
+              if (appendedThisBatch.length > NOTIFY_CAP) {
+                // Anti-spam: one summary toast instead of a burst.
+                const title = 'WhatsApp';
+                const body = `${appendedThisBatch.length} new WhatsApp messages`;
+                notify(title, body);
+                if (cfg.ntfyUrl) notifyNtfy(cfg.ntfyUrl, title, body);
+              } else {
+                for (const env of appendedThisBatch) {
+                  const { title, body } = buildNotification(env);
+                  notify(title, body);
+                  if (cfg.ntfyUrl) notifyNtfy(cfg.ntfyUrl, title, body);
+                }
+              }
+            }
+          }
+        } catch (err) {
+          log(`WARN: notify failed (non-fatal): ${err.message}`);
+        }
+        firstCycle = false;
 
         if (allAppended) {
           saveState(state);

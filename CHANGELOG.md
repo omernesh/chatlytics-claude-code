@@ -6,6 +6,31 @@
 
 All notable changes to the Chatlytics Claude Code plugin are documented here.
 
+## [2.6.0] — 2026-06-24
+
+### Added
+
+- **Real-time desktop push on every new inbound.** The background inbox daemon now
+  fires a Windows desktop toast the instant a new allow-listed WhatsApp message is
+  appended — so you see it even while idle in another window. Title is
+  `WhatsApp · <sender>` (`… in <group>` for groups); body is the security-stripped
+  text preview (first ~180 chars, newlines collapsed). Fully **fail-open**: spawned
+  as a detached PowerShell process that never blocks or crashes the poll loop, with a
+  three-tier fallback — BurntToast → WinRT toast → `NotifyIcon` balloon. Untrusted
+  message text is passed via `-EncodedCommand` + environment variables so it can never
+  break quoting or execute. Anti-spam: the startup backlog flush is suppressed, and a
+  batch of more than 5 new messages collapses to one `N new WhatsApp messages` summary
+  toast. Configurable in `~/.claude/whatsapp-cc/config.json` via
+  `{"notify":{"enabled":true,"ntfyUrl":null}}` — set `enabled:false` to silence toasts,
+  or set `ntfyUrl` to also best-effort POST the title+body to an ntfy endpoint.
+- **`/list-allowlist`** — show the bot's access-policy allow-list (DM + group buckets)
+  from inside Claude Code, resolving each JID to a display name via the chatlytics MCP.
+  Read-only. Part of the `whatsapp` inbox family.
+- **`/remove-from-allowlist <contact-or-group> [dm|group]`** — remove a contact or group
+  from the bot's allow-list (the inverse of `/add-to-allowlist`), with read-merge-write,
+  scope inference from the JID suffix, not-present detection (never PATCHes a no-op), and
+  a post-write re-GET confirmation. Part of the `whatsapp` inbox family.
+
 ## [2.5.2] — 2026-06-24
 
 ### Fixed
