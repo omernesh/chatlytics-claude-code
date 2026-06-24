@@ -24,7 +24,7 @@ Call `chatlytics_send` EXACTLY ONCE:
 ```
 chatlytics_send({ to: <contact name | phone | chatJid>, text: <message> })
 ```
-Do NOT pass `session` — the bot token pins the session server-side. chatlytics fuzzy-resolves names → JIDs.
+Do NOT pass `session` — the bot token pins the session server-side. Chatlytics fuzzy-resolves names → JIDs.
 
 ## Confirm, then STOP
 
@@ -36,11 +36,12 @@ Report send errors plainly (don't swallow). If auth fails, point to the chatlyti
 
 > **STOP after the confirmation. This is fire-and-forget.**
 > Do **NOT** call `chatlytics_poll`. Do **NOT** wait for, fetch, or poll for the reply.
-> The reply arrives on its own, **passively**, via the background inbox daemon — it
-> will appear above a later prompt as `whatsapp message from <name>: …`. The daemon
-> owns the long-poll queue; if the assistant polls it directly it would DRAIN
-> envelopes the daemon is supposed to surface, so the user would silently lose
-> messages. Never poll. Just send, confirm, and stop.
+> The reply arrives on its own, **in real time**, via the background listener the
+> session drives — it will appear directly in the conversation as
+> `📱 whatsapp message from <name>: …`. The listener owns the long-poll queue;
+> if the assistant polls it directly it would drain envelopes the listener is
+> supposed to surface, so the user would silently lose messages. Never poll.
+> Just send, confirm, and stop.
 
 ## Example
 - `/send-whatsapp dana call you in 10` → new message to Dana. → `✅ Sent to Dana: "call you in 10"` then stop.

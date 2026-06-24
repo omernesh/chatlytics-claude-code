@@ -1,17 +1,11 @@
 {
-  "description": "WhatsApp inbox: background long-poll daemon (SessionStart) + passive message surfacing (UserPromptSubmit). Reads CHATLYTICS_BOT_TOKEN; data lives in ~/.claude/whatsapp-cc/.",
+  "description": "WhatsApp inbox for Claude Code. A SessionStart hook (singleton-guarded) tells the session to run a background poll loop that surfaces your allow-listed WhatsApp messages in real time, right in the conversation. Pure Node, cross-platform (Windows/macOS/Linux). Reads CHATLYTICS_BOT_TOKEN from the environment; lock + cursor state live in ~/.claude/whatsapp-cc/.",
   "hooks": {
     "SessionStart": [
       {
+        "matcher": "startup|resume|clear",
         "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/daemon/ensure-daemon.mjs\"", "timeout": 10 }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/daemon/inject-hook.mjs\"", "timeout": 10 }
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/daemon/wa-listener-autostart.mjs\"", "timeout": 10 }
         ]
       }
     ]

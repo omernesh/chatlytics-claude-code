@@ -6,6 +6,46 @@
 
 All notable changes to the Chatlytics Claude Code plugin are documented here.
 
+## [2.7.0] — 2026-06-25
+
+### Changed
+
+- **Real-time inbox re-architected — background poll loop, not a daemon.** Replaced the
+  always-on daemon + `UserPromptSubmit` inject-hook with a single **SessionStart** hook
+  that starts a background poll loop driven by the session itself. Replies now surface
+  **in the conversation in real time** (~2s), as a clean framed line — no waiting for
+  your next prompt, and no desktop notification. The old inject-hook lag (a reply only
+  appeared on your next keystroke) and the Windows-only toast are both gone.
+- **Cross-platform — Windows, macOS, and Linux.** The poller and hook are pure Node
+  (`fs`/`path`/`os`/`fetch`), find each other via `import.meta.url`, and keep lock +
+  cursor state under `~/.claude/whatsapp-cc/` via `os.homedir()`. No PowerShell, no
+  OS-specific APIs.
+- **Single-consumer guard.** A heartbeat lock (`listener.lock`) ensures only ONE Claude
+  Code session polls the bot queue at a time — open a second session and it detects the
+  active listener and stands down, so messages are never split or lost.
+
+### Added
+
+- **Framed inbox messages** — inbound WhatsApp is wrapped in a horizontal-rule frame with
+  a 📱 marker so it stands out in the conversation. Still mirrors WhatsApp faithfully
+  (every message and edit, in full — the v2.5.2 fidelity guarantee is preserved).
+- **Sender-name resolution in the poller** — `@lid` senders resolve to real display names
+  (message → `remoteJidAlt` → directory), falling back to the number only when unknown.
+- **Queue draining (ack)** — the poller now `POST`s `/api/v1/bot/updates/ack`, so the
+  server-side delivery queue drains instead of growing; this also restores true long-poll
+  behavior (near-zero latency).
+
+### Removed
+
+- The background daemon (`daemon.mjs`, `ensure-daemon.mjs`) and the `UserPromptSubmit`
+  inject-hook (`inject-hook.mjs`) — superseded by the SessionStart poll loop. The v2.6.0
+  desktop toast push is removed along with it.
+
+### Security
+
+- The poller reads `CHATLYTICS_BOT_TOKEN` from the environment only — no token is embedded
+  in any shipped file.
+
 ## [2.6.0] — 2026-06-24
 
 ### Added

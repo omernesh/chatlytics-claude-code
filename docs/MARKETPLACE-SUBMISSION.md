@@ -3,13 +3,15 @@
 > Submission steps for getting `chatlytics-claude-code` listed in the
 > `anthropics/claude-plugins-official` marketplace.
 
-**Status as of 2026-06-22:** Plugin is v2.5.0, tagged + pushed. v1.1.2 was
+**Status as of 2026-06-25:** Plugin is v2.7.0, tagged + pushed. v1.1.2 was
 live-verified end-to-end (real WhatsApp send from Claude Code, 2026-05-16);
 the v2.x line adds bot-token auth, long-poll inbound, bot self-config, a
-scripted user-scope installer, and (v2.5.0) a bundled passive WhatsApp inbox
-(background daemon + 4 skills + SessionStart/UserPromptSubmit hooks). Ready to
-submit. The submission step requires a web form (PRs from non-Anthropic authors
-are auto-closed by the marketplace repo's CI).
+scripted user-scope installer, and a bundled real-time WhatsApp inbox. As of
+v2.7.0 the inbox is a single, session-driven background poll loop (started by
+one `SessionStart` hook) that delivers messages into the conversation in real
+time — cross-platform (Windows/macOS/Linux), no daemon, no desktop
+notifications. Ready to submit. The submission step requires a web form (PRs
+from non-Anthropic authors are auto-closed by the marketplace repo's CI).
 
 ## Submit
 
@@ -46,18 +48,18 @@ are auto-closed by the marketplace repo's CI).
 
 ## Why this should pass automated review
 
-- **Two Claude Code hooks, both auditable and fail-open:**
-  - `SessionStart` — probes `127.0.0.1:7656` (a localhost port); if nothing
-    answers, spawns a detached `node` process running the bundled
-    `daemon/ensure-daemon.mjs → daemon/daemon.mjs`. No arbitrary shell exec;
-    the script path is the plugin's own `${CLAUDE_PLUGIN_ROOT}/daemon/` dir.
-    All network I/O is the chatlytics bot long-poll over the user-configured
-    `CHATLYTICS_API_URL` — the same endpoint the existing `chatlytics_poll`
-    MCP tool uses.
-  - `UserPromptSubmit` — reads `~/.claude/whatsapp-cc/inbox.jsonl` (a local
-    spool file written by the daemon) and emits `additionalContext` lines.
-    Fail-open: missing file or empty spool is a silent no-op; the hook never
-    blocks a prompt. No outbound network calls.
+- **One Claude Code hook, auditable and fail-open:**
+  - `SessionStart` (matcher `startup|resume|clear`) — runs the bundled
+    `daemon/wa-listener-autostart.mjs`. It is a pure-Node script that reads a
+    singleton lock (`~/.claude/whatsapp-cc/listener.lock`) and emits an
+    `additionalContext` instruction telling the session to start the bundled
+    poll loop (`daemon/wa-poll-once.mjs`) as a background task — or, if another
+    session already owns the lock, to do nothing. No arbitrary shell exec; the
+    script path is the plugin's own `${CLAUDE_PLUGIN_ROOT}/daemon/` dir. The
+    poller's only network I/O is the chatlytics bot long-poll + ack over the
+    user-configured `CHATLYTICS_API_URL` — the same endpoint the existing
+    `chatlytics_poll` MCP tool uses. Fail-open: any error exits 0 and never
+    blocks session start.
   Both scripts are committed, auditable plain-JS in `daemon/`; no eval,
   no arbitrary shell, no telemetry beyond the user's own Chatlytics endpoint.
 - **BYO telemetry** — the MCP server only POSTs to the user's own Chatlytics
