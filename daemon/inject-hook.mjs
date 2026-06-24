@@ -190,93 +190,42 @@ function mainLocked() {
     return;
   }
 
-  // ── REPLACE-IN-PLACE: collapse by message_id ─────────────────────────────────
-  // Multiple inbox lines can share a message_id: a "⏳ working…" placeholder plus
-  // one or more EDITs of it (WAHA reuses the ORIGINAL id for edits, and chatlytics
-  // stamps `edited:true` + a fresh ts). Keep ONLY the latest version of each
-  // message_id in this batch — the placeholder is suppressed and never shown.
-  // Envelopes with no message_id are each kept as their own unique entry.
-  const order = [];          // message keys, in first-appearance order
-  const latest = new Map();  // key → latest envelope for that key
-  let noIdSeq = 0;
-  for (const env of filtered) {
-    const key = (typeof env.message_id === 'string' && env.message_id)
-      ? env.message_id
-      : `__noid_${noIdSeq++}`;
-    const prev = latest.get(key);
-    if (!prev) {
-      order.push(key);
-      latest.set(key, env);
-    } else if ((env.ts ?? 0) >= (prev.ts ?? 0)) {
-      latest.set(key, env);  // later version wins (edits carry a fresh, larger ts)
-    }
-  }
-
-  // ── Cross-turn edit detection ────────────────────────────────────────────────
-  // The ✏️ "(edited)" marker is shown ONLY when an earlier version of this
-  // message_id was already injected in a PRIOR turn (the user saw the placeholder
-  // before, so the change must be signalled). When the placeholder AND its edit
-  // both land in THIS batch, the placeholder was collapsed away unseen → render
-  // the final text PLAINLY (true replace-in-place, no marker).
-  const injectedSet = loadInjected();
-  const collapsed = order.map(key => {
-    const env = latest.get(key);
-    const renderEdit = env.edited === true
-      && typeof env.message_id === 'string'
-      && injectedSet.has(env.message_id);
-    return { env, renderEdit };
-  });
-
-  // ── Burst-collapse ───────────────────────────────────────────────────────────
-  // Group CONSECUTIVE same-sender messages. A ✏️-edit entry is never merged into
-  // a burst group — it always renders on its own line so the corrected text isn't
-  // hidden by a collapse.
-  const groups = [];
-  for (const item of collapsed) {
-    const sender = item.env.sender_jid ?? item.env.entity_jid ?? 'unknown';
-    const last   = groups[groups.length - 1];
-    const lastWasEdit = last && last.items[last.items.length - 1]?.renderEdit;
-    if (last && last.sender === sender && !item.renderEdit && !lastWasEdit) {
-      last.items.push(item);
-    } else {
-      groups.push({ sender, items: [item] });
-    }
-  }
-
-  // ── Render ───────────────────────────────────────────────────────────────────
-  // Output template (agreed UX):
+  // ── Render every message faithfully — MIRROR WhatsApp ────────────────────────
+  // The allow-list inbox MUST surface EVERY message, in full, in order: no burst-
+  // collapse, no truncation, no placeholder suppression. If the sender sends
+  // "⏳ working…", show it; if they edit it, show the edited message too. chatlytics
+  // stamps `edited:true` + a fresh ts on each edit, and the daemon writes every
+  // version as its own inbox line, so each WhatsApp bubble/edit = one rendered
+  // line here. The ONLY thing skipped is an exact replay of a version already in
+  // THIS read window (message_id + edited-state + ts) — the daemon already dedups
+  // re-polls; this is a belt-and-suspenders guard against a double-read.
+  //
+  // Output template:
   //   DM:    whatsapp message from <name>: <message>
   //   group: whatsapp message from <name> in <group>: <message>
-  // <name> uses env.sender_name (resolved by the daemon) when present, else the
-  // existing number formatting (strip @suffix). <group> uses env.chat_name.
+  //   edit:  whatsapp message from <name> (edited): <message>
+  // <name> uses the daemon-resolved env.sender_name when present, else the
+  // number-formatted JID; <group> uses env.chat_name.
+  const MAX_TEXT = 8000; // generous safety bound — real WhatsApp messages never hit it
+  const seenVersions = new Set();
   const renderLines = [];
-  for (const group of groups) {
-    const { sender, items } = group;
-    // Prefer the daemon-resolved display name; fall back to the formatted JID.
-    const displaySender = senderLabel(items[0]?.env, sender);
+  for (const env of filtered) {
+    const verKey = `${env.message_id ?? ''}:${env.edited ? 'e' : 'o'}:${env.ts ?? ''}`;
+    if (env.message_id && seenVersions.has(verKey)) continue;
+    if (env.message_id) seenVersions.add(verKey);
 
-    // An ✏️-edit group is always a singleton (see grouping above).
-    if (items[0]?.renderEdit) {
-      const env       = items[0].env;
-      const cleanText = cleanDisplayText(env.text ?? '');
-      const preview   = cleanText.slice(0, 300);
-      renderLines.push(`✏️ ${origin(env, displaySender)} (edited): "${preview}"`);
-    } else if (items.length > collapseBurstThreshold) {
-      // Collapse: show latest
-      const latestItem = items[items.length - 1];
-      const cleanText  = cleanDisplayText(latestItem.env.text ?? '');
-      const preview    = cleanText.slice(0, 300).replace(/\n/g, ' ');
-      renderLines.push(
-        `whatsapp ${items.length} messages from ${origin(latestItem.env, displaySender)} (showing latest): "${preview}"`
-      );
-    } else {
-      for (const item of items) {
-        const env       = item.env;
-        const cleanText = cleanDisplayText(env.text ?? '');
-        const preview   = cleanText.slice(0, 300);
-        renderLines.push(`whatsapp message from ${origin(env, displaySender)}: "${preview}"`);
-      }
+    const displaySender = senderLabel(env, env.sender_jid ?? env.entity_jid);
+    let text = cleanDisplayText(env.text ?? '');
+    if (text.length > MAX_TEXT) {
+      text = text.slice(0, MAX_TEXT) + `… [truncated ${text.length - MAX_TEXT} chars]`;
     }
+    const editTag = env.edited === true ? ' (edited)' : '';
+    renderLines.push(`whatsapp message from ${origin(env, displaySender)}${editTag}: "${text}"`);
+  }
+
+  if (renderLines.length === 0) {
+    writeReadState(newReadBytes);
+    return;
   }
 
   // ── H4: Build hook output ────────────────────────────────────────────────────
@@ -297,14 +246,8 @@ function mainLocked() {
   process.stdout.write(JSON.stringify(hookOutput) + '\n');
   writeReadState(newReadBytes);
 
-  // Record every message_id we just surfaced so a LATER edit of it renders with
-  // the ✏️ marker (and so the placeholder is known to have been shown). Done LAST,
-  // after the pointer advance, so a failure here can't double-inject.
-  for (const item of collapsed) {
-    const id = item.env.message_id;
-    if (typeof id === 'string' && id) injectedSet.add(id);
-  }
-  saveInjected(injectedSet);
+  // No post-injection bookkeeping: every version is rendered as it arrives, so
+  // there is no cross-turn edit-marker state to maintain.
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

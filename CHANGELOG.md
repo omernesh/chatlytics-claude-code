@@ -6,6 +6,19 @@
 
 All notable changes to the Chatlytics Claude Code plugin are documented here.
 
+## [2.5.2] — 2026-06-24
+
+### Fixed
+
+- **Inbox now mirrors WhatsApp faithfully — every message, in full.** The
+  inject-hook no longer burst-collapses runs of messages or truncates them to
+  300 chars, and it no longer suppresses "⏳ working…" placeholders. Each inbox
+  line renders as its own `whatsapp message from <name>: <full text>` (edits as
+  `… (edited): …`). The point of an allow-list inbox is to see everything an
+  allow-listed contact/group sends; collapsing/truncating defeated that. A
+  generous 8000-char safety bound remains (real messages never hit it). Security
+  wrapper, muting, lockfile, and fail-open behavior are unchanged.
+
 ## [2.5.1] — 2026-06-24
 
 ### Changed
