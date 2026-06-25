@@ -27,6 +27,14 @@ const LOCK_FILE = path.join(DIR, 'listener.lock');
 const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'wa-poll-once.mjs');
 const FRESH_MS = 180000; // 3 min — tolerates a few missed poll cycles
 
+// Pick the OS-appropriate shell to launch the poller. On Windows the Bash tool
+// wedges and silently drops the poller's stdout (the JSON line never lands), so
+// the listener must run via PowerShell there; mac/Linux use the Bash tool.
+const IS_WIN = process.platform === 'win32';
+const SHELL = IS_WIN
+  ? 'the PowerShell tool (NOT the Bash tool — on Windows the Bash tool wedges and silently drops the poller\'s stdout, so the inbox would go dark)'
+  : 'the Bash tool';
+
 function readStdin() {
   try { return fs.readFileSync(0, 'utf8'); } catch { return ''; }
 }
@@ -67,14 +75,14 @@ try {
   emit([
     `WhatsApp inbox listener — you are the active listener owner for this machine (session ${sessionId}).`,
     'Start the real-time inbox NOW and keep it running while this session is active:',
-    `1. Launch a background task: node "${SCRIPT}" "" "${sessionId}"  (run_in_background).`,
+    `1. Launch a background task with ${SHELL}: node "${SCRIPT}" "" "${sessionId}"  (run_in_background).`,
     '2. When it completes, Read its output file — it prints one JSON line {lines, cursor, count}.',
     '3. Print the inbound wrapped in a NOTICEABLE frame so it stands out from your other output, exactly like this (horizontal rule, the lines, horizontal rule):',
     '   ────────────────────────────────────────',
     '   📱 <each entry of `lines`, one per row, verbatim>',
     '   ────────────────────────────────────────',
     '   The `lines` are already clean (`whatsapp message from <name>: "..."`). Never show the raw JSON or any agent-message wrapper.',
-    '4. IMMEDIATELY relaunch the same background task. Always keep exactly ONE poll in flight, even while doing other work.',
+    `4. IMMEDIATELY relaunch the same background task with the SAME shell (${IS_WIN ? 'PowerShell' : 'Bash'}). Always keep exactly ONE poll in flight, even while doing other work.`,
     'You are the ONLY consumer of the WhatsApp queue: do NOT also start the daemon or a listener subagent (subagents zombie + render an ugly wrapper). The script self-manages the cursor (poll-cursor.json) and heartbeats the singleton lock. Architecture: memory whatsapp-in-cc-skills.',
   ].join('\n'));
   process.exit(0);

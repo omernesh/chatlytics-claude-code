@@ -6,6 +6,17 @@
 
 All notable changes to the Chatlytics Claude Code plugin are documented here.
 
+## [2.7.1] — 2026-06-25
+
+### Fixed
+
+- **Listener launches with the OS-appropriate shell.** The `SessionStart` autostart
+  hook now tells the session to start the background poll loop via **PowerShell on
+  Windows** and **Bash on macOS/Linux**. On Windows the Bash tool can wedge and
+  silently drop the poller's stdout, which left the inbox dark even though the poller
+  ran. The hook detects `process.platform` and injects the right shell into its launch
+  instruction (the poller code itself stays pure-Node and unchanged).
+
 ## [2.7.0] — 2026-06-25
 
 ### Changed
