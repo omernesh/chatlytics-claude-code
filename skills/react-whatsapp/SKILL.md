@@ -23,9 +23,13 @@ chatlytics_dispatch({
   action: "react",
   target: <chatJid>,
   session: <sessionId>,
-  parameters: { chatId: <chatJid>, messageId: <full messageId>, emoji: <emoji> }
+  parameters: { messageId: <full messageId>, emoji: <emoji> }
 })
 ```
+
+Do **not** pass a `chatId` in `parameters` — `react` derives the landing chat
+from the `messageId` middle segment, and the WhatsApp reaction endpoint does not
+accept a `chatId`. Only the full `messageId` (+ `emoji`) is needed.
 
 To remove a reaction, pass `parameters.remove: true` (emoji optional). Note: reactions must be enabled on the account (if `reactionLevel` is off the dispatch returns a disabled message — relay it).
 
