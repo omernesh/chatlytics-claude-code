@@ -37,7 +37,7 @@ when self-hosting or pointing at a non-default endpoint.
 | `chatlytics_directory` | User wants to browse all contacts/groups |
 | `chatlytics_actions` | User asks what WhatsApp operations are available |
 | `chatlytics_health` | User asks about connection status |
-| `chatlytics_login` | User just installed the plugin and wants to verify their API key + connection |
+| `chatlytics_login` | User just installed the plugin and wants to verify their bot token + connection |
 | `chatlytics_dispatch` | User asks for any action beyond send/read/search (groups, polls, reactions, labels, media, presence, etc.) |
 | `chatlytics_poll` | Poll for inbound WhatsApp messages (long-poll, webhook-less). Requires `CHATLYTICS_BOT_TOKEN`. |
 | `chatlytics_configure` | User wants to change the bot's own display name, trigger word, message prefix/suffix, keyword filter, or DM/group allow-lists. Requires `CHATLYTICS_BOT_TOKEN`. |

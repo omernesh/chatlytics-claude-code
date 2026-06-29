@@ -29,7 +29,7 @@ chatlytics_send({ to: <chatJid or contact name>, text: <reply text>, session: <s
 
 ## Confirm
 
-One line: `✅ Replied to <name>: "<text>"`. If the send errors, report the error and (if it's auth) point to the `CHATLYTICS_BOT_TOKEN` / publicApiKey setup. Do not silently swallow a failure.
+One line: `✅ Replied to <name>: "<text>"`. If the send errors, report the error and (if it's auth) point to the `CHATLYTICS_BOT_TOKEN` setup (your bot token is your API key). Do not silently swallow a failure.
 
 ## Examples
 - `/reply-whatsapp hey man, all good` → replies to whoever sent the last message.
