@@ -66,6 +66,27 @@ That fetches a single self-contained bundled MCP server
 (`servers/chatlytics-mcp.bundle.mjs`) plus skills and hooks. **No `npm install`
 needed** — the bundle ships all dependencies inline.
 
+### Install from npm
+
+The plugin is published to npm as
+[`@chatlytics/claude-code`](https://www.npmjs.com/package/@chatlytics/claude-code).
+Install it and run the bundled installer — it copies the MCP server to a stable
+path and registers it user-scoped (same durable install as the scripted path
+below, no git clone required):
+
+```bash
+npm install -g @chatlytics/claude-code
+chatlytics-mcp-install --token sk_bot_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+Or run it once without a global install:
+
+```bash
+npx -p @chatlytics/claude-code chatlytics-mcp-install --token sk_bot_xxx
+```
+
+Re-run after `npm update -g @chatlytics/claude-code` to refresh the stable copy.
+
 ### Scripted user-scope install (recommended for operators)
 
 Plugin-cache directories are version-pinned and wiped on every plugin update.
