@@ -202,6 +202,12 @@ To receive messages from a contact or group, add them to the allow-list:
 /add-to-allowlist Team Chat group
 ```
 
+> **Auto-allow on send.** If you send a WhatsApp message to a contact who **isn't**
+> on your allow-list, they're automatically granted **8 hours** of allow-list access
+> (DMs only) so their reply routes straight back into this conversation. It
+> auto-expires after 8 hours — use `/add-to-allowlist <contact>` to keep them
+> permanently.
+
 ### Companion skills
 
 | Skill | What it does |

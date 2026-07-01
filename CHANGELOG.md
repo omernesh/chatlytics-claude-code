@@ -6,6 +6,15 @@
 
 All notable changes to the Chatlytics Claude Code plugin are documented here.
 
+## [2.7.5] — 2026-07-01
+
+### Documentation
+
+- **README: documented "auto-allow on send".** Sending a WhatsApp message to a
+  contact who is not on the bot's allow-list auto-grants them 8 hours of allow-list
+  access (DMs only) so their reply routes back into the conversation; auto-expires.
+  (Behavior shipped in v2.4.0 — now documented.)
+
 ## [2.7.4] — 2026-07-01
 
 ### Changed
