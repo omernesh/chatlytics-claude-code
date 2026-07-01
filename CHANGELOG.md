@@ -6,6 +6,16 @@
 
 All notable changes to the Chatlytics Claude Code plugin are documented here.
 
+## [2.7.4] — 2026-07-01
+
+### Changed
+
+- **Docs: removed all self-hosting / on-prem references.** Chatlytics is a hosted
+  SaaS — there is no self-host option. `CHATLYTICS_API_URL` is optional and defaults
+  to `https://node.chatlytics.ai`; you normally never need to set it. Reworded the
+  README Setup note, the `chatlytics` skill, and the troubleshooting matrix (502 and
+  timeout rows) to drop "self-host", "on-prem", and "LAN URL" wording.
+
 ## [2.7.1] — 2026-06-25
 
 ### Fixed
@@ -223,9 +233,9 @@ All notable changes to the Chatlytics Claude Code plugin are documented here.
 - **Docs: session-restart requirement + connection troubleshooting matrix.**
   Mid-session `claude mcp add` does not surface tools until the Claude Code
   session restarts (now documented in README + QUICKSTART). New troubleshooting
-  mapping: timeout → dead/unroutable IP (use DNS/LAN URL); connection refused →
-  wrong host/port; 401 → bad/rotated token; 502 → Cloudflare tunnel concurrent
-  long-poll limit (use LAN URL on-prem).
+  mapping: timeout → dead/unroutable address (use the default DNS URL);
+  connection refused → wrong host/port; 401 → bad/rotated token; 502 →
+  too many simultaneous long-poll consumers.
 
 ### Fixed
 

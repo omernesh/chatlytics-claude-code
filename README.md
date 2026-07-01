@@ -151,7 +151,7 @@ copy the `sk_bot_…` token. **The plaintext token appears once — store it
 somewhere safe.** You can rotate it at any time from the same page.
 
 `CHATLYTICS_API_URL` is **optional** — it defaults to `https://node.chatlytics.ai`
-(the hosted Chatlytics API). Override only if you self-host.
+(the hosted Chatlytics API) — you normally never need to set it.
 
 ```json
 {
@@ -161,11 +161,6 @@ somewhere safe.** You can rotate it at any time from the same page.
   }
 }
 ```
-
-**Legacy `CHATLYTICS_API_KEY`:** v3.37 operators using the shared admin bearer
-can keep using it — the plugin falls back when `CHATLYTICS_BOT_TOKEN` is unset.
-Note that `chatlytics_poll` and `chatlytics_configure` require a bot token.
-New installs should use `CHATLYTICS_BOT_TOKEN`.
 
 ---
 
@@ -272,10 +267,9 @@ Example asks:
 | Two sessions open — only one shows messages | Expected behavior — single-consumer guard | The second session stands down by design; close one session |
 | `HTTP 401` | Bad, rotated, or revoked token | Rotate at app.chatlytics.ai → Bots, copy the new `sk_bot_*`, update settings, restart |
 | `HTTP 403` | Token valid but action not permitted | Check the bot's permission scope in the Chatlytics dashboard |
-| `chatlytics_poll requires CHATLYTICS_BOT_TOKEN` | Only `CHATLYTICS_API_KEY` is set | Add a `CHATLYTICS_BOT_TOKEN` to settings |
 | Request times out (`AbortError`) | `CHATLYTICS_API_URL` points at a dead/unroutable address | Use `https://node.chatlytics.ai` (the default) |
 | Connection refused (instant) | Wrong host or port | Verify `CHATLYTICS_API_URL`; hosted default is `https://node.chatlytics.ai` (no port) |
-| `HTTP 502` during `chatlytics_poll` | Cloudflare concurrent long-poll limit | Use a direct LAN URL for on-prem deployments |
+| `HTTP 502` during `chatlytics_poll` | Too many simultaneous long-poll consumers | Keep the number of concurrent Claude Code sessions low; retry after a moment |
 | Tools missing after install | Mid-session install | Restart the Claude Code session |
 | `webhook_registered` not true | WhatsApp session disconnected | Open app.chatlytics.ai → Sessions and re-scan the QR code |
 
