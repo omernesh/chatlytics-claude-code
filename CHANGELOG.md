@@ -6,6 +6,20 @@
 
 All notable changes to the Chatlytics Claude Code plugin are documented here.
 
+## [2.7.6] — 2026-07-05
+
+### Changed
+
+- **`CHATLYTICS_SESSION` removed** — the env var is no longer read or injected
+  anywhere in the plugin. Bot tokens (`sk_bot_*`) have always been session-pinned
+  server-side; clients must not send a `session` at all for bot-token callers.
+  Legacy `api_key` users who need session routing should pass `session` per-call
+  as a parameter to `chatlytics_send` or `chatlytics_dispatch`. Previously a
+  stale or unexpanded `CHATLYTICS_SESSION` could cause `403 bot_session_mismatch`
+  errors.
+- **`scripts/install.mjs`** — `--session` flag and `CHATLYTICS_SESSION` env
+  injection removed from the scripted installer.
+
 ## [2.7.5] — 2026-07-01
 
 ### Documentation

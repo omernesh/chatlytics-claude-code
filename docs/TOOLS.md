@@ -43,9 +43,9 @@ chatlytics_send(to, text, session?)
   errors (the ambiguous case lists up to 10 candidates with their JIDs).
 - All auth modes send through the gated `POST /api/v1/send` route (unified in
   v2.1.1/P6). For bot tokens the server pins the session to the bot's own, so
-  `session` is optional. Legacy api_key callers **must** provide a session
-  (per-call `session` or `CHATLYTICS_SESSION`) — `/api/v1/send` requires one
-  and returns an actionable 400 if it's missing.
+  `session` is optional. Legacy api_key callers **must** provide a session via
+  the per-call `session` parameter — `/api/v1/send` requires one and returns an
+  actionable 400 if it's missing. (`CHATLYTICS_SESSION` was removed in v2.7.6.)
 
 ### chatlytics_read
 

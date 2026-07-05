@@ -21014,8 +21014,6 @@ var StdioServerTransport = class {
 var API_URL = process.env.CHATLYTICS_API_URL || "https://node.chatlytics.ai";
 var BOT_TOKEN = process.env.CHATLYTICS_BOT_TOKEN || "";
 var API_KEY = process.env.CHATLYTICS_API_KEY || "";
-var _rawSession = process.env.CHATLYTICS_SESSION || "";
-var DEFAULT_SESSION = _rawSession.startsWith("${") ? "" : _rawSession;
 var AUTH_VALUE = BOT_TOKEN || API_KEY;
 var AUTH_MODE = BOT_TOKEN ? "bot_token" : API_KEY ? "api_key" : "none";
 var NO_TOKEN_PROMPT = [
@@ -21228,7 +21226,9 @@ if (allow("chatlytics_send")) {
         const result = await callApi("POST", "/api/v1/send", {
           chatId,
           text,
-          session: session || DEFAULT_SESSION || void 0
+          // Bot tokens: session is server-pinned — omit. Legacy api_key: caller must
+          // pass `session` per-call (CHATLYTICS_SESSION removed in v2.7.6).
+          session: session || void 0
         });
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) + grantNote }] };
       } catch (e) {
@@ -21452,7 +21452,7 @@ if (allow("chatlytics_dispatch")) {
         const body = { action };
         if (target !== void 0) body.target = target;
         if (parameters !== void 0) body.params = parameters;
-        if (session || DEFAULT_SESSION) body.session = session || DEFAULT_SESSION;
+        if (session) body.session = session;
         const result = await callApi("POST", "/api/v1/actions", body);
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       } catch (e) {

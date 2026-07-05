@@ -710,6 +710,9 @@ async function assertPollRejectsApiKeyMode() {
 // ---------------------------------------------------------------------------
 
 // --- Assertion 9: chatlytics_send in api_key mode targets /api/v1/send (NOT /actions) ---
+// v2.7.6: CHATLYTICS_SESSION env var removed — session is now per-call only.
+// This assertion passes `session` as a per-call tool argument and verifies it
+// arrives in the /api/v1/send body (DEFAULT_SESSION is gone).
 async function assertSendUnifiedApiKeyMode() {
   const captureLog = [];
   const { server, port } = await makeMockServer({ captureLog });
@@ -721,12 +724,13 @@ async function assertSendUnifiedApiKeyMode() {
         CHATLYTICS_API_URL: `http://127.0.0.1:${port}`,
         CHATLYTICS_BOT_TOKEN: "",
         CHATLYTICS_API_KEY: API_KEY,
-        CHATLYTICS_SESSION: "sess_default",
+        // CHATLYTICS_SESSION is no longer read (v2.7.6) — session must be per-call.
       },
       customToolCall: {
         name: "chatlytics_send",
         // JID input so resolveChatId returns immediately (no /actions search hop).
-        arguments: { to: "972544329000@c.us", text: "hello unified" },
+        // Pass session per-call (the only supported path for api_key mode in v2.7.6+).
+        arguments: { to: "972544329000@c.us", text: "hello unified", session: "sess_default" },
       },
       postCallWaitMs: 1200,
     });
@@ -752,14 +756,15 @@ async function assertSendUnifiedApiKeyMode() {
     if (parsed.text !== "hello unified") {
       fail(`send-unified: /send body text expected 'hello unified', got '${parsed.text}'`);
     }
+    // v2.7.6: session arrives via per-call arg, not DEFAULT_SESSION.
     if (parsed.session !== "sess_default") {
-      fail(`send-unified: /send body session expected 'sess_default' (DEFAULT_SESSION), got '${parsed.session}'`);
+      fail(`send-unified: /send body session expected 'sess_default' (per-call), got '${parsed.session}'`);
     }
     const callResp = parseToolCallResponse(result.stdout);
     if (!callResp || callResp.result?.isError) {
       fail(`send-unified: tool response errored. resp=${JSON.stringify(callResp).slice(0, 400)}`);
     }
-    ok("v5.0/P6: chatlytics_send (api_key mode) → POST /api/v1/send, NOT /api/v1/actions");
+    ok("v5.0/P6: chatlytics_send (api_key mode) → POST /api/v1/send, NOT /api/v1/actions (session per-call)");
   } finally {
     server.close();
   }
@@ -785,8 +790,8 @@ async function assertSendApiKeyNoSessionSurfacesError() {
         CHATLYTICS_API_URL: `http://127.0.0.1:${port}`,
         CHATLYTICS_BOT_TOKEN: "",
         CHATLYTICS_API_KEY: API_KEY,
-        // CHATLYTICS_SESSION intentionally UNSET (no default session available)
-        CHATLYTICS_SESSION: "",
+        // No session per-call and no per-call `session` arg — server returns 400.
+        // (CHATLYTICS_SESSION env var removed in v2.7.6; session is per-call only.)
       },
       customToolCall: {
         name: "chatlytics_send",

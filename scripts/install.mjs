@@ -13,8 +13,8 @@
 //     with "Cannot use import statement outside a module". DO NOT rename to .js.
 //
 // Usage:
-//   node scripts/install.mjs --token sk_bot_xxx [--url https://node.chatlytics.ai] [--session sess_id]
-//   node scripts/install.mjs            # reads CHATLYTICS_BOT_TOKEN / CHATLYTICS_API_URL / CHATLYTICS_SESSION from env
+//   node scripts/install.mjs --token sk_bot_xxx [--url https://node.chatlytics.ai]
+//   node scripts/install.mjs            # reads CHATLYTICS_BOT_TOKEN / CHATLYTICS_API_URL from env
 //   node scripts/install.mjs --dry-run  # show what would happen, change nothing
 //
 // Idempotent: re-running overwrites the copied bundle and re-registers the
@@ -40,7 +40,8 @@ const DRY_RUN = args.includes("--dry-run");
 const botToken = argValue("--token") ?? process.env.CHATLYTICS_BOT_TOKEN ?? "";
 const apiKey = argValue("--api-key") ?? process.env.CHATLYTICS_API_KEY ?? "";
 const apiUrl = argValue("--url") ?? process.env.CHATLYTICS_API_URL ?? DEFAULT_URL;
-const session = argValue("--session") ?? process.env.CHATLYTICS_SESSION ?? "";
+// CHATLYTICS_SESSION removed in v2.7.6 — bot token pins session server-side.
+// Legacy api_key users who need it should set it in their settings.json env block.
 const destPath =
   argValue("--dest") ?? join(homedir(), ".chatlytics", "mcp", "chatlytics-mcp.mjs");
 
@@ -55,7 +56,6 @@ Options:
   --token <sk_bot_...>   Bot token (preferred; or env CHATLYTICS_BOT_TOKEN)
   --api-key <key>        Legacy admin api_key fallback (or env CHATLYTICS_API_KEY)
   --url <url>            API base URL (default ${DEFAULT_URL}; or env CHATLYTICS_API_URL)
-  --session <id>         Optional session id (or env CHATLYTICS_SESSION)
   --dest <path>          Override the stable bundle path
   --dry-run              Print actions without executing
 `);
@@ -134,7 +134,6 @@ const envArgs = [];
 if (botToken) envArgs.push("-e", `CHATLYTICS_BOT_TOKEN=${botToken}`);
 if (!botToken && apiKey) envArgs.push("-e", `CHATLYTICS_API_KEY=${apiKey}`);
 envArgs.push("-e", `CHATLYTICS_API_URL=${apiUrl}`);
-if (session) envArgs.push("-e", `CHATLYTICS_SESSION=${session}`);
 
 runClaude(["mcp", "add", "-s", "user", "chatlytics", ...envArgs, "--", "node", destPath]);
 

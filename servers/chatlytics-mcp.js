@@ -10,12 +10,9 @@ import { z } from "zod";
 const API_URL = process.env.CHATLYTICS_API_URL || "https://node.chatlytics.ai";
 const BOT_TOKEN = process.env.CHATLYTICS_BOT_TOKEN || "";
 const API_KEY = process.env.CHATLYTICS_API_KEY || "";
-// Guard against an unexpanded "${CHATLYTICS_SESSION}" placeholder leaking in from
-// an .mcp.json env mapping when the user hasn't defined CHATLYTICS_SESSION. A value
-// starting with "${" is treated as UNSET — bot tokens are session-pinned server-side,
-// so DEFAULT_SESSION stays "" and the send omits session (server resolves it).
-const _rawSession = process.env.CHATLYTICS_SESSION || "";
-const DEFAULT_SESSION = _rawSession.startsWith("${") ? "" : _rawSession;
+// Bot tokens are session-pinned server-side; bot-token callers never need a session.
+// Legacy api_key callers who need session routing must pass `session` per-call.
+// CHATLYTICS_SESSION is no longer read — removed in v2.7.6 (bot token pins server-side).
 const AUTH_VALUE = BOT_TOKEN || API_KEY;
 const AUTH_MODE = BOT_TOKEN ? "bot_token" : (API_KEY ? "api_key" : "none");
 
@@ -302,22 +299,11 @@ if (allow("chatlytics_send")) {
         // bot_send_via_dispatch_denied), and /api/v1/send is the single gated
         // route that runs executeOutboundGates → checkBotPairing + session-pin
         // (INV-09). /api/v1/send needs a real JID, so resolve human names first
-        // (mirrors chatlytics_read) for every mode. The server pins the session
-        // to the bot's own for bot tokens (session optional); for api_key callers
-        // we still forward session || DEFAULT_SESSION so the prior
-        // default-resolution behavior is preserved — if no session is available
-        // we send `undefined` and let the server surface any missing-session
-        // error rather than silently dropping the send.
+        // (mirrors chatlytics_read) for every mode.
         //
-        // M2 (v5.0/P6 review): api_key / none-mode callers MUST set
-        // CHATLYTICS_SESSION (or pass a per-call `session`). Unlike the old
-        // /api/v1/actions dispatcher — which default-resolved the session
-        // server-side — /api/v1/send REQUIRES a session, so a no-session api_key
-        // call returns an actionable 400 ({error:"...session..."}) which callApi
-        // surfaces verbatim to the LLM (NOT silently dropped). We intentionally do
-        // NOT add a client-side hard error here: the server's 400 is the single
-        // source of truth and stays actionable. Bot-token callers are UNAFFECTED —
-        // the server pins the session to the bot's own, so `session` is optional.
+        // api_key callers must supply `session` per-call — /api/v1/send requires it
+        // and returns an actionable 400 if absent (surfaced verbatim to the LLM).
+        // Bot-token callers: session is server-pinned, so `session` is optional.
         const chatId = await resolveChatId(to);
         // bot-access-grants (v2.4.0) — AUTO-GRANT 8h DM access when sending to a
         // recipient who is NOT in this bot's DM allow-list, so their REPLY routes
@@ -357,7 +343,9 @@ if (allow("chatlytics_send")) {
         const result = await callApi("POST", "/api/v1/send", {
           chatId,
           text,
-          session: session || DEFAULT_SESSION || undefined,
+          // Bot tokens: session is server-pinned — omit. Legacy api_key: caller must
+          // pass `session` per-call (CHATLYTICS_SESSION removed in v2.7.6).
+          session: session || undefined,
         });
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) + grantNote }] };
       } catch (e) {
@@ -652,7 +640,7 @@ if (allow("chatlytics_dispatch")) {
         const body = { action };
         if (target !== undefined) body.target = target;
         if (parameters !== undefined) body.params = parameters;
-        if (session || DEFAULT_SESSION) body.session = session || DEFAULT_SESSION;
+        if (session) body.session = session;
         const result = await callApi("POST", "/api/v1/actions", body);
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       } catch (e) {
