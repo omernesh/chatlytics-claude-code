@@ -22,6 +22,9 @@ problems from auth problems.
 | Requests **time out** (~10–30s, `AbortError`) | `CHATLYTICS_API_URL` was overridden and points at an unreachable address | Unset `CHATLYTICS_API_URL` to use the default `https://node.chatlytics.ai`, or re-run `node scripts/install.mjs` (no `--url`) to restore it. |
 | **Connection refused** (instant) | Wrong host or port — nothing listens there | Hosted default is `https://node.chatlytics.ai`, no port in the URL (Cloudflare proxies 443). |
 | **HTTP 502**, especially during `chatlytics_poll` | Too many simultaneous long-poll consumers on the hosted API | Keep the number of concurrent Claude Code sessions low; only one session needs to long-poll at a time. |
+| `SUPERSEDED (4409)` in the MCP / listener log | Two stream consumers on one bot token — newest wins | Keep one consumer per bot (one session calling `chatlytics_poll`, or the inbox listener). The loser backs off 60-300 s; an idle MCP consumer releases the bot after 10 min. |
+| `chatlytics_health` shows `inbound.transport: longpoll` | The deployment has no bot stream yet (404) | Nothing to do — it re-probes every 10 min and switches by itself. Force with `CHATLYTICS_TRANSPORT=stream` to get an error instead. |
+| `chatlytics_health` shows `inbound.transport: stopped` | Token rejected on the stream (4401/4403/401/403) or `transport=stream` against a server without it | Fix `CHATLYTICS_BOT_TOKEN` (or resume the bot) and restart Claude Code. |
 | `⚠️ webhook_registered is not true` from `chatlytics_login` | WhatsApp session disconnected or never paired | app.chatlytics.ai → Sessions → re-scan the QR code from WhatsApp on your phone. |
 | `No WhatsApp contact, group, or channel found matching "X"` | Name resolution found nothing | Ask Claude to `chatlytics_search` for it — search is fuzzier than the send/read resolver. |
 | `Multiple matches for "X"` | Ambiguous name | The error lists up to 10 candidates with JIDs — retry with the exact JID. |

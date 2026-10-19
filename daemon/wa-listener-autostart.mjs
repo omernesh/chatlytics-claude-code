@@ -24,7 +24,10 @@ import { fileURLToPath } from 'url';
 // ~/.claude/whatsapp-cc/ OR bundled in the plugin at ${CLAUDE_PLUGIN_ROOT}/daemon/.
 const DIR = path.join(os.homedir(), '.claude', 'whatsapp-cc');
 const LOCK_FILE = path.join(DIR, 'listener.lock');
-const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'wa-poll-once.mjs');
+// v3.0.0: the poller is the esbuild BUNDLE (the bot-stream client needs the `ws`
+// package; the bundle inlines it so no node_modules is needed next to it).
+// Source: wa-poll-once.mjs. Rebuild with `npm --prefix servers run build`.
+const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'wa-poll-once.bundle.mjs');
 const FRESH_MS = 180000; // 3 min — tolerates a few missed poll cycles
 
 // Pick the OS-appropriate shell to launch the poller. On Windows the Bash tool
@@ -61,7 +64,7 @@ try {
   if (fresh && lock.owner && lock.owner !== sessionId) {
     emit('WhatsApp inbox: a listener is already active in another Claude Code session, '
       + 'so THIS session is NOT starting one (single-consumer rule — two pollers would split/lose messages). '
-      + 'Do not run wa-poll-once.mjs, the old daemon, or a listener subagent here. '
+      + 'Do not run wa-poll-once.bundle.mjs, the old daemon, or a listener subagent here. '
       + 'The lock self-expires ~3 min after the other session stops polling.');
     process.exit(0);
   }

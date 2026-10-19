@@ -106,11 +106,14 @@ the fields you pass are updated. Identity and permissions (session, account,
 default-bot status, permission scope, the token) CANNOT be changed here —
 the server rejects them.
 
-## Inbound: long-poll mode
+## Inbound: `chatlytics_poll`
 
 When `CHATLYTICS_BOT_TOKEN` is configured, the agent can receive inbound
 WhatsApp messages addressed to the bot WITHOUT running an HTTP webhook
-server. Use `chatlytics_poll`:
+server. Since v3.0 the MCP server receives over one persistent connection
+(the Chatlytics bot stream) and `chatlytics_poll` returns what it has
+buffered; on a deployment without the stream it long-polls instead. The
+calls are the same either way. Use `chatlytics_poll`:
 
 1. First call: `chatlytics_poll({ timeout_ms: 25000 })` — blocks up to 25s
    for the first envelope.
@@ -119,7 +122,11 @@ server. Use `chatlytics_poll`:
 3. Resume call: pass `cursor` back as `{ cursor, timeout_ms: 25000 }`.
 4. Once the user-facing reply for a batch is sent, ack the cursor:
    `chatlytics_poll({ ack: cursor_of_last_handled, cursor, timeout_ms })`.
-   The ack is best-effort; failures log but do not block.
+   The ack is best-effort; failures log but do not block. (On the stream a
+   batch is acknowledged as soon as it is returned to you, so `ack` is
+   harmless and optional there.)
+5. `chatlytics_health` reports which inbound transport is live
+   (`inbound.transport`: `stream`, `longpoll`, `idle` or `stopped`).
 
 Long-poll is bot-scoped. `chatlytics_poll` returns an actionable error if
 the operator only has `CHATLYTICS_API_KEY` set — tell them to provision a

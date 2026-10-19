@@ -23,7 +23,7 @@ dispatch time remains the security boundary).
 | `chatlytics_health` | Chatlytics + WhatsApp connection status | `GET /health` | none required (diagnostics) |
 | `chatlytics_login` | Validate credential + surface bot identity | `GET /health`, `GET /api/v1/bot/me`, `GET /api/v1/bot/me/pairings` | any (gives onboarding prompt when unset) |
 | `chatlytics_dispatch` | Invoke any catalog action by name | `POST /api/v1/actions` | bot token or api_key (bot tokens are allowlist-scoped — see below) |
-| `chatlytics_poll` | Long-poll for inbound messages | `GET /api/v1/bot/updates`, `POST /api/v1/bot/updates/ack` | **bot token only** |
+| `chatlytics_poll` | Receive inbound messages | `wss://…/api/v1/bot/stream` (v3.0+); fallback `GET /api/v1/bot/updates`, `POST /api/v1/bot/updates/ack` | **bot token only** |
 | `chatlytics_configure` | Self-configure the bot (name, trigger, filters) | `PATCH /api/v1/bot/me` | **bot token only** |
 
 When no credential is configured at all (`AUTH_MODE === "none"`), every data
@@ -139,8 +139,37 @@ operator api_key is not subject to the bot allowlist.
 chatlytics_poll(cursor?, timeout_ms?, ack?)
 ```
 
-Drives the v4.0 long-poll inbound endpoints — receive WhatsApp messages
-addressed to your bot without exposing a webhook URL:
+Receive WhatsApp messages addressed to your bot without exposing a webhook
+URL. The arguments and the `{ envelopes, cursor }` result are the same on
+every transport.
+
+**v3.0+ — bot stream (default, `CHATLYTICS_TRANSPORT=auto`).** On the first
+call the MCP server opens ONE WebSocket to `/api/v1/bot/stream`
+(subprotocol `chatlytics.bot.v1`, bearer in the header) and keeps it in the
+background; each call returns the envelopes buffered since the last one, or
+waits up to `timeout_ms` for the next. Envelopes are acknowledged to the
+server when a call RETURNS them, never on receipt, so a process that dies
+with unread envelopes loses nothing: the server redelivers them. The buffer
+is bounded by the server's in-flight window (`CHATLYTICS_STREAM_BUFFER`,
+default 256, max 256). `ack` is ignored on the stream (a cumulative ack of
+a model-supplied cursor could delete envelopes not yet returned); `cursor`
+is a resume hint for the first connection only. After 10 minutes without a
+call and with nothing buffered, the socket is closed and the bot released.
+
+| Server answer | Plugin does |
+|---|---|
+| 404 / 426 on connect | `auto`: long-poll (below), re-probe the stream every 600 s. `stream`: error. |
+| 503 / 429 / 409 / 5xx / network / close 1013 | Back off with jitter (honouring `Retry-After`) and retry the stream — never a fallback. |
+| close 1012 (deploy, token rotated) | Reconnect after `reconnect.after_ms` + jitter (0 for `token_rotated`). |
+| close 4409 (superseded) | Long backoff (60 s → 300 s) + a warning: another consumer holds this bot. |
+| close 4401 / 4403, HTTP 401 / 403 | Stop; `chatlytics_poll` returns the token error. Re-checked every 300 s. |
+| nothing (no ping, no frame) for 75 s | Reconnect. The server pings every 30 s. |
+
+`chatlytics_health` reports the live transport under `inbound`.
+`CHATLYTICS_TRANSPORT=longpoll` restores the v2.x behaviour exactly.
+
+**Long-poll (`CHATLYTICS_TRANSPORT=longpoll`, or the auto fallback):** drives
+the v4.0 long-poll inbound endpoints:
 
 - `GET /api/v1/bot/updates?cursor=...&timeout_ms=...` — blocks up to
   `timeout_ms` for new envelopes. Default 25 000 ms, clamped client-side to

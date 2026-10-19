@@ -6,6 +6,38 @@
 
 All notable changes to the Chatlytics Claude Code plugin are documented here.
 
+## [3.0.0] — 2026-10-19
+
+### Changed (BREAKING for operators, not for the tool contract)
+
+- **Inbound moved from long-poll to the Chatlytics bot stream.** The MCP
+  server now receives your bot's messages over ONE persistent WebSocket
+  (`/api/v1/bot/stream`, subprotocol `chatlytics.bot.v1`) instead of a
+  request per poll. `chatlytics_poll` keeps its exact arguments and its
+  `{ envelopes, cursor }` result; it now returns from a local buffer the
+  background connection fills. Messages arrive instantly.
+- **Acknowledged when returned, not when received.** A message is confirmed
+  to the server only once `chatlytics_poll` has handed it to the model, so a
+  Claude Code process that exits with unread messages loses none — the server
+  delivers them again. Repeats are filtered by message id.
+- **The WhatsApp inbox listener uses the stream too**, and confirms each batch
+  only after printing it. The SessionStart hook now runs
+  `daemon/wa-poll-once.bundle.mjs`.
+- **New setting `CHATLYTICS_TRANSPORT`** = `auto` (default) | `stream` |
+  `longpoll`. `auto` falls back to long-poll only where the stream is not
+  available yet, and re-checks every 10 minutes. `longpoll` keeps the 2.x
+  behaviour exactly. Optional `CHATLYTICS_STREAM_BUFFER` (1–256, default 256).
+- **`chatlytics_health`** now reports the inbound transport (`inbound`), and
+  `chatlytics_login` prints it.
+- The connection opens on the first `chatlytics_poll`, not at start-up, and is
+  released after 10 idle minutes, so several open Claude Code windows do not
+  fight over one bot.
+
+### Upgrading
+
+Restart Claude Code after updating. No settings change is required; to stay on
+long-poll set `CHATLYTICS_TRANSPORT=longpoll` in the `env` block.
+
 ## [2.7.6] — 2026-07-05
 
 ### Changed

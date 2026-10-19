@@ -12,9 +12,9 @@ visual border) as soon as they arrive, via the background listener the session d
 ## How the real-time delivery works
 
 1. **On session start**, `daemon/wa-listener-autostart.mjs` runs automatically
-   (SessionStart hook). It starts a background poll loop (`daemon/wa-poll-once.mjs`)
+   (SessionStart hook). It starts a background listener (`daemon/wa-poll-once.bundle.mjs`)
    that the session itself drives.
-2. The poll loop long-polls Chatlytics for new envelopes addressed to the bot.
+2. The listener holds the Chatlytics bot stream (one WebSocket; long-poll fallback) for new envelopes addressed to the bot.
 3. Each incoming message is framed and delivered **directly into the conversation**:
 
 ```

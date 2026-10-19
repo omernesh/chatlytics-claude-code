@@ -1,6 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { parseTransport } from "./lib/stream.mjs";
+import { StreamInbox, DEFAULT_BUFFER_MAX } from "./lib/inbox.mjs";
 
 // v4.0 MCP-SCOPED-01 (Phase 334) — env-var resolution
 // BOT_TOKEN takes precedence; API_KEY is the legacy v3.37 fallback. AUTH_VALUE
@@ -205,7 +207,7 @@ function clampLongPollTimeout(value) {
   return Math.min(Math.max(MIN_LONGPOLL_TIMEOUT_MS, n), MAX_LONGPOLL_TIMEOUT_MS);
 }
 
-const server = new McpServer({ name: "chatlytics", version: "2.5.0" });
+const server = new McpServer({ name: "chatlytics", version: "3.0.0" });
 
 // Detect WhatsApp JID-shaped strings. WAHA uses 4 suffix families:
 //   <phone>@c.us           — 1:1 contacts
@@ -470,9 +472,13 @@ if (allow("chatlytics_health")) {
     async () => {
       try {
         const result = await callApi("GET", "/health");
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        // v3.0.0: report this plugin's inbound transport next to the server
+        // health (stream / longpoll / idle / stopped). No secrets — no token,
+        // no fingerprint beyond the server's conn_id.
+        const body = result && typeof result === "object" && !Array.isArray(result) ? { ...result, inbound: inboundStatus() } : { health: result, inbound: inboundStatus() };
+        return { content: [{ type: "text", text: JSON.stringify(body, null, 2) }] };
       } catch (e) {
-        return { isError: true, content: [{ type: "text", text: e.message }] };
+        return { isError: true, content: [{ type: "text", text: `${e.message}\ninbound: ${JSON.stringify(inboundStatus())}` }] };
       }
     }
   );
@@ -598,7 +604,8 @@ if (allow("chatlytics_login")) {
               text:
                 `✅ Connected to Chatlytics at ${API_URL} (auth mode: ${AUTH_MODE}). ` +
                 `Webhook registered. Sessions: ${sessions}.` +
-                identityLines,
+                identityLines +
+                (inbox ? `\nInbound: ${inbox.transport} (configured: ${TRANSPORT}) — ${inbox.detail}` : ""),
             },
           ],
         };
@@ -650,25 +657,209 @@ if (allow("chatlytics_dispatch")) {
   );
 }
 
-// 9. Long-poll inbound (CC-V2-02, Phase 337).
-// Drives the v4.0 long-poll endpoints (P335):
+// 9. Inbound: chatlytics_poll (CC-V2-02, Phase 337; v3.0.0 bot stream).
+//
+// v3.0.0 (chatlytics#793 Phase 4): inbound moved from long-poll to the bot
+// WebSocket stream (`wss://…/api/v1/bot/stream`, subprotocol
+// `chatlytics.bot.v1`). The MCP server holds ONE socket in the background
+// (./lib/inbox.mjs) and `chatlytics_poll` returns from its in-memory buffer.
+// The tool's contract is UNCHANGED: same arguments, same `{ envelopes, cursor }`
+// result, same bot-token-only rule. What changed underneath:
+//   - Envelopes are acked when chatlytics_poll RETURNS them (ack-on-return;
+//     see the ACK TIMING note in lib/inbox.mjs). The `ack` argument is
+//     accepted but no longer needed on the stream — a cursor the model passes
+//     could name envelopes still in the buffer, and a cumulative ack of it
+//     would delete them unseen, so the stream path ignores it.
+//   - `cursor` is a resume hint for the FIRST connection only; after that the
+//     server-side position (+ our own) wins.
+//   - `timeout_ms` bounds how long the call waits for the buffer.
+//
+// CHATLYTICS_TRANSPORT = auto (default) | stream | longpoll.
+//   auto     — stream; falls back to long-poll ONLY when the upgrade answers
+//              404/426 (stream not enabled / old server) and re-probes every
+//              600 s. Transient refusals (503/429/409/5xx, network, 1013) are
+//              retried with backoff — never a fallback.
+//   stream   — stream only; 404/426 is reported as an error.
+//   longpoll — the v2.x behaviour, byte for byte (longPollOnce below).
+//
+// Long-poll endpoints (v2.x path, kept for `longpoll` and the auto fallback):
 //   GET  /api/v1/bot/updates        — blocks ≤ timeout_ms for new envelopes
 //   POST /api/v1/bot/updates/ack    — advances cursor for delivered envelopes
 //
 // Bot-token mode ONLY. The server-side routes are gated by
 // `resolveBotFromBearer` (P324) — an operator/admin api_key Bearer would 401.
-// We short-circuit client-side with a clear, actionable error to save a
-// round-trip and give the LLM a clearer signal it can relay to the user.
-//
+const TRANSPORT = parseTransport(process.env.CHATLYTICS_TRANSPORT, (m) => console.error(`[chatlytics-mcp] ${m}`));
+const STREAM_BUFFER_MAX = Number(process.env.CHATLYTICS_STREAM_BUFFER) || DEFAULT_BUFFER_MAX;
+const PLUGIN_VERSION = "3.0.0";
+// Settle bound for the FIRST poll: how long we wait for the initial stream
+// attempt to answer (hello, 404/426 → long-poll, or auth refusal).
+const STREAM_SETTLE_MS = 10_000;
+// A stream that has not connected for this long turns an empty poll into an
+// error the model can relay (otherwise empty results look like silence).
+const STREAM_FAILING_REPORT_MS = 60_000;
+
+const inbox =
+  AUTH_MODE === "bot_token"
+    ? new StreamInbox({
+        baseUrl: API_URL,
+        token: BOT_TOKEN,
+        userAgent: `chatlytics-claude-code/${PLUGIN_VERSION}`,
+        transport: TRANSPORT,
+        bufferMax: STREAM_BUFFER_MAX,
+        log: (level, msg) => console.error(`[chatlytics-mcp] ${level === "info" ? "" : level.toUpperCase() + " "}${msg}`),
+      })
+    : null;
+if (inbox) console.error(`[chatlytics-mcp] Inbound transport: ${TRANSPORT} (stream opens on the first chatlytics_poll)`);
+
+function inboundStatus() {
+  if (!inbox) return { configured: TRANSPORT, transport: "unavailable", detail: "inbound requires CHATLYTICS_BOT_TOKEN" };
+  return inbox.status();
+}
+
+const POLL_AUTH_ERROR = (status) =>
+  `Chatlytics rejected the bot token (HTTP ${status}). ` +
+  `Verify CHATLYTICS_BOT_TOKEN in .claude/settings.json matches the ` +
+  `value from https://app.chatlytics.ai → Bots. If you rotated recently, ` +
+  `the old token's 24h grace window may have expired.`;
+
+// v2.x long-poll path — UNCHANGED behaviour (transport: longpoll, or the
+// auto fallback while the stream is not enabled on the server).
 // Uses bespoke fetch (NOT callApi) because:
 //   - We need the longer AbortSignal window (timeout_ms + 5s buffer) to let
 //     the server's long-poll wait actually return; callApi's 30s default
 //     would clip a 60s wait.
 //   - We tolerate 200 with empty envelopes (long-poll timeout) as a normal
 //     return — no error.
-// We still reuse the 401/403 error formatting path from callApi by re-using
-// its error shape pattern (manual replication kept tight; if the auth
-// header logic ever changes, update both paths).
+async function longPollOnce({ cursor, timeout_ms, ack }) {
+  // Best-effort ack first.
+  if (ack && typeof ack === "string" && ack.length > 0) {
+    try {
+      const ackRes = await fetch(`${API_URL}/api/v1/bot/updates/ack`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${BOT_TOKEN}`,
+        },
+        body: JSON.stringify({ cursor: ack }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!ackRes.ok) {
+        // Don't fail the poll over an ack hiccup — just log.
+        console.error(`[chatlytics-mcp] chatlytics_poll: ack returned HTTP ${ackRes.status} — proceeding with GET`);
+      }
+    } catch (e) {
+      console.error(`[chatlytics-mcp] chatlytics_poll: ack network error: ${e.message} — proceeding with GET`);
+    }
+  }
+
+  const tms = clampLongPollTimeout(timeout_ms);
+  const qs = new URLSearchParams();
+  if (cursor) qs.set("cursor", cursor);
+  qs.set("timeout_ms", String(tms));
+  const url = `${API_URL}/api/v1/bot/updates?${qs.toString()}`;
+
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${BOT_TOKEN}` },
+      // Allow the server's clamped wait plus a 5s buffer so we don't
+      // race the server's response with our own AbortSignal.
+      signal: AbortSignal.timeout(tms + 5_000),
+    });
+    const text = await res.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = text;
+    }
+    if (!res.ok) {
+      if (res.status === 401 || res.status === 403) {
+        return { isError: true, content: [{ type: "text", text: POLL_AUTH_ERROR(res.status) }] };
+      }
+      if (res.status === 400) {
+        // Most common case: invalid_cursor after rotation. Suggest restart.
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text:
+                `Chatlytics returned HTTP 400 from /bot/updates — most often ` +
+                `'invalid_cursor' after a token rotation. Drop the cursor and ` +
+                `re-poll with no cursor (fresh start). Raw: ${typeof data === "string" ? data.slice(0, 200) : JSON.stringify(data).slice(0, 200)}`,
+            },
+          ],
+        };
+      }
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: `HTTP ${res.status}: ${typeof data === "string" ? data : JSON.stringify(data)}`,
+          },
+        ],
+      };
+    }
+    return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+  } catch (e) {
+    return {
+      isError: true,
+      content: [{ type: "text", text: `chatlytics_poll network error: ${e.message}` }],
+    };
+  }
+}
+
+// v3.0.0 stream path: serve from the background socket's buffer.
+async function streamPollOnce({ cursor, timeout_ms, ack }) {
+  const started = Date.now();
+  const tms = clampLongPollTimeout(timeout_ms);
+  inbox.touch(cursor);
+  if (!inbox.settled) await inbox.whenSettled(Math.min(tms, STREAM_SETTLE_MS));
+  const stoppedResult = () => {
+    if (inbox.authRejected) {
+      const m = /HTTP (\d{3})|closed (\d{4})/.exec(inbox.lastError || "");
+      const code = m ? m[1] || (m[2] === "4403" ? "403" : "401") : "401";
+      return { isError: true, content: [{ type: "text", text: POLL_AUTH_ERROR(code) }] };
+    }
+    return { isError: true, content: [{ type: "text", text: `chatlytics_poll: inbound stopped — ${inbox.detail}` }] };
+  };
+  if (inbox.transport === "longpoll") {
+    return longPollOnce({ cursor, timeout_ms, ack });
+  }
+  if (inbox.transport === "stopped") return stoppedResult();
+  await inbox.waitForEnvelopes(Math.max(0, tms - (Date.now() - started)));
+  if (inbox.transport === "longpoll") {
+    // Fell back while we waited (the server disabled the stream): serve this call over long-poll.
+    return longPollOnce({ cursor, timeout_ms: Math.max(1_000, tms - (Date.now() - started)), ack });
+  }
+  // Rejected while we waited (e.g. 4401 right after hello). The buffer was
+  // cleared with the socket, so there is nothing to hand over.
+  if (inbox.transport === "stopped" && !inbox.hasDeliverable()) return stoppedResult();
+  const { envelopes, cursor: next } = inbox.take();
+  if (
+    envelopes.length === 0 &&
+    inbox.transport !== "stream" &&
+    inbox.failingSince != null &&
+    Date.now() - inbox.failingSince >= STREAM_FAILING_REPORT_MS
+  ) {
+    return {
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: `chatlytics_poll: the message stream has not connected for ${Math.round((Date.now() - inbox.failingSince) / 1000)}s (${inbox.lastError}). Retrying in the background — no messages are lost; they wait server-side.`,
+        },
+      ],
+    };
+  }
+  // ACK-ON-RETURN: the ack frame goes out after this result has been handed
+  // to the MCP transport (next tick), never on receipt.
+  if (envelopes.length > 0) setImmediate(() => inbox.ackDelivered());
+  return { content: [{ type: "text", text: JSON.stringify({ envelopes, cursor: next }, null, 2) }] };
+}
+
 if (allow("chatlytics_poll")) {
   server.tool(
     "chatlytics_poll",
@@ -698,97 +889,8 @@ if (allow("chatlytics_poll")) {
           ],
         };
       }
-
-      // Best-effort ack first.
-      if (ack && typeof ack === "string" && ack.length > 0) {
-        try {
-          const ackRes = await fetch(`${API_URL}/api/v1/bot/updates/ack`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${BOT_TOKEN}`,
-            },
-            body: JSON.stringify({ cursor: ack }),
-            signal: AbortSignal.timeout(10_000),
-          });
-          if (!ackRes.ok) {
-            // Don't fail the poll over an ack hiccup — just log.
-            console.error(`[chatlytics-mcp] chatlytics_poll: ack returned HTTP ${ackRes.status} — proceeding with GET`);
-          }
-        } catch (e) {
-          console.error(`[chatlytics-mcp] chatlytics_poll: ack network error: ${e.message} — proceeding with GET`);
-        }
-      }
-
-      const tms = clampLongPollTimeout(timeout_ms);
-      const qs = new URLSearchParams();
-      if (cursor) qs.set("cursor", cursor);
-      qs.set("timeout_ms", String(tms));
-      const url = `${API_URL}/api/v1/bot/updates?${qs.toString()}`;
-
-      try {
-        const res = await fetch(url, {
-          method: "GET",
-          headers: { Authorization: `Bearer ${BOT_TOKEN}` },
-          // Allow the server's clamped wait plus a 5s buffer so we don't
-          // race the server's response with our own AbortSignal.
-          signal: AbortSignal.timeout(tms + 5_000),
-        });
-        const text = await res.text();
-        let data;
-        try {
-          data = JSON.parse(text);
-        } catch {
-          data = text;
-        }
-        if (!res.ok) {
-          if (res.status === 401 || res.status === 403) {
-            return {
-              isError: true,
-              content: [
-                {
-                  type: "text",
-                  text:
-                    `Chatlytics rejected the bot token (HTTP ${res.status}). ` +
-                    `Verify CHATLYTICS_BOT_TOKEN in .claude/settings.json matches the ` +
-                    `value from https://app.chatlytics.ai → Bots. If you rotated recently, ` +
-                    `the old token's 24h grace window may have expired.`,
-                },
-              ],
-            };
-          }
-          if (res.status === 400) {
-            // Most common case: invalid_cursor after rotation. Suggest restart.
-            return {
-              isError: true,
-              content: [
-                {
-                  type: "text",
-                  text:
-                    `Chatlytics returned HTTP 400 from /bot/updates — most often ` +
-                    `'invalid_cursor' after a token rotation. Drop the cursor and ` +
-                    `re-poll with no cursor (fresh start). Raw: ${typeof data === "string" ? data.slice(0, 200) : JSON.stringify(data).slice(0, 200)}`,
-                },
-              ],
-            };
-          }
-          return {
-            isError: true,
-            content: [
-              {
-                type: "text",
-                text: `HTTP ${res.status}: ${typeof data === "string" ? data : JSON.stringify(data)}`,
-              },
-            ],
-          };
-        }
-        return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-      } catch (e) {
-        return {
-          isError: true,
-          content: [{ type: "text", text: `chatlytics_poll network error: ${e.message}` }],
-        };
-      }
+      if (TRANSPORT === "longpoll") return longPollOnce({ cursor, timeout_ms, ack });
+      return streamPollOnce({ cursor, timeout_ms, ack });
     }
   );
 }
@@ -924,3 +1026,22 @@ if (allow("chatlytics_configure")) {
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
+
+// v3.0.0: release the bot stream cleanly when Claude Code closes us (stdin
+// EOF) or signals us, so the server frees the bot's lease at once instead of
+// waiting for the ping timeout. Unread buffered envelopes are unacked and are
+// redelivered to the next consumer.
+let shuttingDown = false;
+async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  try {
+    await Promise.race([inbox?.stop(), new Promise((r) => setTimeout(r, 3000))]);
+  } finally {
+    process.exit(0);
+  }
+}
+process.stdin.on("end", shutdown);
+process.stdin.on("close", shutdown);
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
