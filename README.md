@@ -39,7 +39,7 @@ delivers messages in real time (~2s), directly into the conversation:
 ```
 
 - **SessionStart hook** runs `daemon/wa-listener-autostart.mjs` when a Claude Code
-  session starts. It kicks off a background poll loop (`daemon/wa-poll-once.mjs`)
+  session starts. It kicks off a background listener (`daemon/wa-poll-once.bundle.mjs`, bot stream)
   that the session itself drives.
 - Messages appear **in the conversation, in real time** — no waiting for your
   next prompt. Edits show an `(edited)` tag.
@@ -223,9 +223,10 @@ To receive messages from a contact or group, add them to the allow-list:
 ### How it works
 
 1. A **SessionStart hook** starts the background poll loop when Claude Code launches.
-2. The listener long-polls Chatlytics for new messages addressed to your bot.
-3. Each incoming message is framed and delivered **into the conversation in real time**
-   (~2s latency).
+2. The listener holds one persistent connection to Chatlytics (the bot stream) and
+   receives new messages addressed to your bot the moment they arrive. On a deployment
+   without the stream it falls back to long-polling by itself.
+3. Each incoming message is framed and delivered **into the conversation in real time**.
 4. The **single-consumer guard** ensures only one session listens at a time — open
    a second Claude Code window and it stands down gracefully.
 
@@ -247,7 +248,7 @@ The plugin ships 10 MCP tools:
 | `chatlytics_health` | Check connection and session status |
 | `chatlytics_login` | Validate your bot token and confirm identity |
 | `chatlytics_dispatch` | Invoke any action by name (polls, reactions, media, groups, labels…) |
-| `chatlytics_poll` | Long-poll for inbound messages (bot token required) |
+| `chatlytics_poll` | Receive inbound messages (bot stream, long-poll fallback; bot token required) |
 | `chatlytics_configure` | Self-configure the bot (trigger, access policy, display name…) |
 
 `chatlytics_send` and `chatlytics_read` accept either a JID
@@ -275,7 +276,8 @@ Example asks:
 | `HTTP 403` | Token valid but action not permitted | Check the bot's permission scope in the Chatlytics dashboard |
 | Request times out (`AbortError`) | `CHATLYTICS_API_URL` points at a dead/unroutable address | Use `https://node.chatlytics.ai` (the default) |
 | Connection refused (instant) | Wrong host or port | Verify `CHATLYTICS_API_URL`; hosted default is `https://node.chatlytics.ai` (no port) |
-| `HTTP 502` during `chatlytics_poll` | Too many simultaneous long-poll consumers | Keep the number of concurrent Claude Code sessions low; retry after a moment |
+| `SUPERSEDED (4409)` in the MCP log | Two consumers on one bot token (two sessions calling `chatlytics_poll`, or the inbox listener plus `chatlytics_poll`) | Keep one consumer per bot; the other backs off and stops on its own after 10 idle minutes |
+| Want the old behaviour | Opt out of the stream | Set `CHATLYTICS_TRANSPORT=longpoll` in the `env` block and restart |
 | Tools missing after install | Mid-session install | Restart the Claude Code session |
 | `webhook_registered` not true | WhatsApp session disconnected | Open app.chatlytics.ai → Sessions and re-scan the QR code |
 

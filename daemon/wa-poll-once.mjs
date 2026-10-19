@@ -1,24 +1,49 @@
 /**
- * wa-poll-once.mjs — WhatsApp inbox long-poll loop + resolve + format.
+ * wa-poll-once.mjs — WhatsApp inbox listener: bot stream + resolve + format.
  *
- * Long-polls the chatlytics bot updates endpoint in an INTERNAL loop, resolves
- * each sender's display name (LID -> phone -> directory), formats each envelope
- * into a clean line, and prints ONE json object {lines, cursor, count} to stdout
- * then exits — but ONLY when there are lines to deliver (or after ~20 min idle,
- * or on a surfaced error). Empty cycles re-poll internally so the CC session
- * stays dormant (no context bloat) until a real message arrives.
+ * v3.0.0 (chatlytics#793 Phase 4): receives over the chatlytics bot WebSocket
+ * stream (`/api/v1/bot/stream`, subprotocol `chatlytics.bot.v1`) instead of
+ * long-poll. Holds the socket until envelopes arrive, resolves each sender's
+ * display name (LID -> phone -> directory), formats each envelope into a clean
+ * line, and prints ONE json object {lines, cursor, count} to stdout then exits
+ * — but ONLY when there are lines to deliver (or after ~18 min idle, or on a
+ * surfaced error). Idle time is a held socket (server pings every 30 s), so
+ * the CC session stays dormant until a real message arrives.
+ *
+ * ACK TIMING (at-least-once, never drop): the stream ack for a batch is sent
+ * only AFTER its JSON line has been written to stdout — the hand-off to the
+ * CC session. The printed cursor is also persisted (poll-cursor.json) and sent
+ * as `ready.cursor` on the next launch, so an ack lost to a crash is still
+ * honoured (the server resumes from max(server, client)). Ids of printed
+ * envelopes are persisted too (last 2000 / 24 h) so a redelivery after a crash
+ * is acked without being shown twice.
+ *
+ * CHATLYTICS_TRANSPORT = auto (default) | stream | longpoll — same contract as
+ * the MCP server: auto falls back to the v2.x long-poll loop ONLY on 404/426
+ * and re-probes every 600 s; transient failures back off and retry the stream.
  *
  * Run as a BACKGROUND task: when it exits with lines, the CC session is
  * re-invoked, prints `lines` verbatim (already clean — no raw envelope, no
- * wrapper), and relaunches. The cursor is self-managed via poll-cursor.json and
- * the singleton lock is heartbeated each cycle.
+ * wrapper), and relaunches. The singleton lock is heartbeated while running.
  *
- * Usage: node wa-poll-once.mjs "<cursor>" "<ownerSessionId>"   (both optional)
+ * Shipped as daemon/wa-poll-once.bundle.mjs (esbuild, `ws` inlined) so it runs
+ * with no node_modules next to it. Build: `npm --prefix servers run build`.
+ *
+ * Usage: node wa-poll-once.bundle.mjs "<cursor>" "<ownerSessionId>"   (both optional)
  */
 
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import {
+  CLOSE_SUPERSEDED,
+  DedupeCache,
+  HEALTHY_RESET_MS,
+  STREAM_REPROBE_MS,
+  parseTransport,
+  reconnectDelay,
+  runStreamOnce,
+} from '../servers/lib/stream.mjs';
 
 const TOKEN = (process.env.CHATLYTICS_BOT_TOKEN && process.env.CHATLYTICS_BOT_TOKEN.trim()) || '';
 const API = ((process.env.CHATLYTICS_API_URL && process.env.CHATLYTICS_API_URL.trim()) || 'https://node.chatlytics.ai')
@@ -170,40 +195,186 @@ async function pollOnce(cur) {
   return { lines, cursor: newCursor, count: lines.length };
 }
 
-// Loop internally: long-poll repeatedly, only RETURN (exit the process → wake the
-// CC session) when there are lines to deliver, on an error worth surfacing, or
-// after MAX_CYCLES (~20 min) to refresh + avoid an indefinitely stuck background
-// task. Empty cycles just re-poll, so the CC session stays DORMANT (no context
-// bloat) until a real message arrives. Each long-poll blocks ~55s server-side,
-// so there is no tight spin.
+// v2.x long-poll loop — kept verbatim for `CHATLYTICS_TRANSPORT=longpoll` and
+// for the auto fallback while the server has no stream route (404/426).
+// Loops internally: only RETURNS when there are lines to deliver, on an error
+// worth surfacing, or at `deadline` (null). Empty cycles re-poll.
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const POLL_INTERVAL_MS = 2000;
+
+async function longPollLoop(deadline) {
+  // Ack what was already delivered last run, draining the server queue.
+  await ackCursor(cursor);
+  while (Date.now() < deadline) {
+    heartbeat();
+    let res;
+    try { res = await pollOnce(cursor); }
+    catch (e) { return { lines: [], cursor, count: 0, error: String((e && e.message) || e) }; }
+    cursor = res.cursor;
+    if (res.count > 0) return res;       // deliver
+    if (res.error) return res;           // surface auth/HTTP errors instead of looping on them
+    await sleep(POLL_INTERVAL_MS);
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// v3.0.0 stream path
+// ---------------------------------------------------------------------------
+
+const VERSION = '3.0.0';
+// Coalesce a burst into one hand-off: print once the stream has been quiet for
+// QUIET_MS after the last new envelope (at most COALESCE_MAX_MS after the
+// first). A burst that fits the window is then handed off whole, so nothing is
+// sent-but-not-printed when we close (that would burn a delivery attempt —
+// the server dead-letters at 3).
+const QUIET_MS = 400;
+const COALESCE_MAX_MS = 2000;
+const DAEMON_MAX_INFLIGHT = 64;
+// How long to wait for `acked` after printing before closing anyway (the
+// persisted cursor covers a lost ack on the next launch).
+const ACKED_WAIT_MS = 3000;
+
+function loadState() {
+  try { return JSON.parse(fs.readFileSync(CURSOR_FILE, 'utf8')) || {}; } catch { return {}; }
+}
+
+function saveState(cur, dedupe) {
+  try {
+    if (!fs.existsSync(DIR)) fs.mkdirSync(DIR, { recursive: true });
+    fs.writeFileSync(CURSOR_FILE, JSON.stringify({ cursor: cur, ts: Date.now(), ids: dedupe.entries() }));
+  } catch { /* fail-open */ }
+}
+
+function writeStdout(line) {
+  return new Promise((resolve) => {
+    try { process.stdout.write(line + '\n', () => resolve()); } catch { resolve(); }
+  });
+}
+
+/**
+ * Serve the stream until something is delivered (printed), a terminal answer
+ * arrives, or `deadline`. Reconnects per the §3.6 contract in between.
+ * Returns {kind: 'delivered'|'deadline'|'unavailable'|'auth', ...}.
+ */
+async function streamSession(deadline, dedupe) {
+  let attempt = 0;
+  let supersededStreak = 0;
+  while (Date.now() < deadline) {
+    heartbeat();
+    const ac = new AbortController();
+    const untilDeadline = setTimeout(() => ac.abort(), Math.max(0, deadline - Date.now()));
+    const beat = setInterval(heartbeat, 60_000);
+    let pending = [];          // frames received, not yet handed off (seq order)
+    let flushTimer = null;
+    let firstAt = 0;
+    let flushing = null;       // promise of the hand-off in progress
+    let delivered = false;
+    let ackedWaiter = null;
+
+    const flush = (conn) => {
+      flushTimer = null;
+      const batch = pending.splice(0);
+      const fresh = batch.filter((f) => !f.dup);
+      if (fresh.length === 0) return;
+      const last = batch[batch.length - 1];
+      flushing = (async () => {
+        const lines = [];
+        for (const f of fresh) {
+          try { lines.push(await formatEnvelope(f.envelope)); } catch { /* skip one bad envelope */ }
+          if (f.id) dedupe.add(f.id);
+        }
+        cursor = last.cursor;
+        saveState(cursor, dedupe);                     // resume point survives a crash
+        await writeStdout(JSON.stringify({ lines, cursor, count: lines.length }));
+        delivered = true;
+        // ACK only after the hand-off line is written.
+        let ackTimer = null;
+        const acked = new Promise((r) => { ackedWaiter = r; ackTimer = setTimeout(r, ACKED_WAIT_MS); });
+        if (conn.ack(last.cursor)) await acked;
+        clearTimeout(ackTimer);
+        conn.close(1000, 'delivered');
+      })().catch(() => { conn.close(1000, 'delivered'); });
+    };
+
+    const outcome = await runStreamOnce({
+      baseUrl: API,
+      token: TOKEN,
+      userAgent: `chatlytics-claude-code-inbox/${VERSION}`,
+      cursor: cursor || undefined,
+      caps: [],
+      maxInflight: DAEMON_MAX_INFLIGHT,
+      signal: ac.signal,
+      onEnv: (frame, conn) => {
+        if (delivered || flushing) return;        // closing; anything later is redelivered
+        if (typeof frame.cursor !== 'string' || !frame.cursor) return;
+        const dup = typeof frame.id === 'string' && dedupe.seen(frame.id);
+        if (dup && pending.length === 0) {
+          // Already shown on an earlier run: ack it, nothing to print.
+          cursor = frame.cursor;
+          conn.ack(frame.cursor);
+          saveState(cursor, dedupe);
+          return;
+        }
+        pending.push({ id: frame.id, cursor: frame.cursor, envelope: frame.envelope, dup });
+        if (dup && !firstAt) return;
+        if (!firstAt) firstAt = Date.now();
+        clearTimeout(flushTimer);
+        const wait = Math.max(0, Math.min(QUIET_MS, firstAt + COALESCE_MAX_MS - Date.now()));
+        flushTimer = setTimeout(() => flush(conn), wait);
+      },
+      onAcked: () => { ackedWaiter?.(); },
+    });
+    clearTimeout(untilDeadline);
+    clearInterval(beat);
+    clearTimeout(flushTimer);
+    if (flushing) await flushing;
+    if (delivered) return { kind: 'delivered' };
+    if (Date.now() >= deadline || outcome.error === 'stopped') return { kind: 'deadline' };
+    if (outcome.unavailable) return { kind: 'unavailable', status: outcome.httpStatus };
+    if (outcome.authRejected) return { kind: 'auth', detail: outcome.describe() };
+
+    if (outcome.connectedMs >= HEALTHY_RESET_MS) attempt = 0;
+    if (outcome.closeCode === CLOSE_SUPERSEDED) supersededStreak += 1;
+    else if (outcome.connectedMs >= HEALTHY_RESET_MS) supersededStreak = 0;
+    const delay = reconnectDelay(outcome, attempt, supersededStreak);
+    attempt += 1;
+    await sleep(Math.min(delay, Math.max(0, deadline - Date.now())));
+  }
+  return { kind: 'deadline' };
+}
+
+// Loop ~18 min, then yield back to the CC session (idle refresh).
+const MAX_MS = 18 * 60 * 1000;
 
 async function main() {
   if (!TOKEN) {
     return { lines: [], cursor, count: 0, error: 'CHATLYTICS_BOT_TOKEN not set' };
   }
-  // The chatlytics /bot/updates endpoint returns IMMEDIATELY — it does NOT hold
-  // the connection for timeout_ms (measured ~0.4s). So pace polls with a sleep
-  // rather than relying on a server-side long-poll. Loop ~18 min, then yield back
-  // to the CC session (idle refresh). ~5s poll cadence = ~5s worst-case latency.
-  const MAX_MS = 18 * 60 * 1000;
-  const POLL_INTERVAL_MS = 2000;
-  const start = Date.now();
-  let cur = cursor;
-  // Ack what was already delivered last run, draining the server queue. Once the
-  // queue is truly empty, GET long-polls (blocks ≤ timeout_ms) → near-zero latency.
-  await ackCursor(cur);
-  while (Date.now() - start < MAX_MS) {
-    heartbeat();
-    let res;
-    try { res = await pollOnce(cur); }
-    catch (e) { return { lines: [], cursor: cur, count: 0, error: String((e && e.message) || e) }; }
-    cur = res.cursor;
-    if (res.count > 0) return res;       // deliver
-    if (res.error) return res;           // surface auth/HTTP errors instead of looping on them
-    await sleep(POLL_INTERVAL_MS);
+  const transport = parseTransport(process.env.CHATLYTICS_TRANSPORT);
+  const deadline = Date.now() + MAX_MS;
+  if (transport === 'longpoll') {
+    return (await longPollLoop(deadline)) || { lines: [], cursor, count: 0, idle: true };
   }
-  return { lines: [], cursor: cur, count: 0, idle: true };
+  const dedupe = new DedupeCache();
+  dedupe.load(loadState().ids);
+  while (Date.now() < deadline) {
+    const r = await streamSession(deadline, dedupe);
+    if (r.kind === 'delivered') return null; // already printed
+    if (r.kind === 'deadline') break;
+    if (r.kind === 'auth') {
+      return { lines: [], cursor, count: 0, error: `stream rejected the bot token (${r.detail}) — verify CHATLYTICS_BOT_TOKEN, or resume the bot at https://app.chatlytics.ai` };
+    }
+    if (r.kind === 'unavailable') {
+      if (transport === 'stream') {
+        return { lines: [], cursor, count: 0, error: `CHATLYTICS_TRANSPORT=stream but the server has no stream route (HTTP ${r.status}); set CHATLYTICS_TRANSPORT=auto to use long-poll` };
+      }
+      // auto: long-poll until the re-probe, then try the stream again.
+      const res = await longPollLoop(Math.min(deadline, Date.now() + STREAM_REPROBE_MS));
+      if (res) return res;
+    }
+  }
+  return { lines: [], cursor, count: 0, idle: true };
 }
 
 // NOTE: no process.exit() — on Windows, forcing exit while undici's HTTP handles
@@ -212,7 +383,7 @@ async function main() {
 // request (see fetchT) lets the socket close promptly so drain is fast.
 try {
   const out = await main();
-  console.log(JSON.stringify(out));
+  if (out) console.log(JSON.stringify(out));
 } catch (e) {
   console.log(JSON.stringify({ lines: [], cursor, count: 0, error: String((e && e.message) || e) }));
 }

@@ -281,6 +281,14 @@ function makeMockServer({
         response.end("not_found");
       });
     });
+    // v3.0.0: this mock is a server WITHOUT the bot stream — answer the
+    // WebSocket upgrade the way chatlytics does with the stream flag off
+    // (404), so chatlytics_poll takes the auto long-poll fallback and the
+    // v2.x long-poll assertions below keep exercising that exact path.
+    server.on("upgrade", (req, socket) => {
+      captureLog.push({ method: "UPGRADE", path: req.url.split("?")[0], url: req.url, authorization: req.headers.authorization });
+      socket.end("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    });
     server.listen(0, "127.0.0.1", () => {
       const port = server.address().port;
       res({ server, port });
@@ -586,8 +594,15 @@ async function assertPollToolEnvelope() {
       },
       postCallWaitMs: 1500,
     });
+    // v3.0.0: the stream is tried FIRST (bearer in the header, never the URL);
+    // the 404 is what routes this call to the long-poll fallback.
+    const upIdx = captureLog.findIndex((r) => r.method === "UPGRADE" && r.path === "/api/v1/bot/stream");
+    if (upIdx < 0) fail(`poll-envelope: no WebSocket upgrade to /api/v1/bot/stream was attempted. capture=${JSON.stringify(captureLog.map(c => `${c.method} ${c.url}`))}`);
+    if (captureLog[upIdx].authorization !== `Bearer ${BOT_TOKEN}`) fail(`poll-envelope: stream upgrade missing Bearer header`);
+    if (captureLog[upIdx].url.includes(BOT_TOKEN)) fail(`poll-envelope: INV-02 — bot token in the stream URL`);
     const updReq = captureLog.find((r) => r.path === "/api/v1/bot/updates" && r.method === "GET");
     if (!updReq) fail(`poll-envelope: GET /api/v1/bot/updates was not called. capture=${JSON.stringify(captureLog.map(c => c.url))}`);
+    if (captureLog.indexOf(updReq) < upIdx) fail(`poll-envelope: long-poll ran before the stream probe`);
     if (updReq.authorization !== `Bearer ${BOT_TOKEN}`) {
       fail(`poll-envelope: /bot/updates Authorization expected 'Bearer ${BOT_TOKEN}', got '${updReq.authorization}'`);
     }
@@ -605,7 +620,7 @@ async function assertPollToolEnvelope() {
     if (!text.includes(`"cursor": "cur1"`)) {
       fail(`poll-envelope: tool response text missing cursor=cur1. text=${text.slice(0, 400)}`);
     }
-    ok("CC-V2-02: chatlytics_poll → GET /bot/updates with Bearer + querystring + envelope passthrough");
+    ok("CC-V2-02 + v3.0.0: chatlytics_poll → stream probe 404 → GET /bot/updates with Bearer + querystring + envelope passthrough");
   } finally {
     server.close();
   }
