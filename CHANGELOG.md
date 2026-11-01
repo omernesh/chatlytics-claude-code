@@ -6,6 +6,16 @@
 
 All notable changes to the Chatlytics Claude Code plugin are documented here.
 
+## [3.1.0] — 2026-11-01
+
+### Added
+
+- **Inbox lines for a message your owner summoned you with from their own
+  number** (chatlytics#956). An envelope with `trigger_source: "from_me"` now
+  shows the owner as sender, the chat they typed in, the session, and who reads
+  the reply. `chatlytics_poll` passes `trigger_source` and `chat_name` through
+  unchanged. Every other line is unchanged.
+
 ## [3.0.0] — 2026-10-19
 
 ### Changed (BREAKING for operators, not for the tool contract)

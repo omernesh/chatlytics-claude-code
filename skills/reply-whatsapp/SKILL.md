@@ -26,6 +26,7 @@ chatlytics_send({ to: <chatJid or contact name>, text: <reply text>, session: <s
 
 - `to` = the resolved `chatJid` when available (most reliable; avoids name ambiguity), else the contact name (chatlytics fuzzy-resolves it).
 - `session` = the originating `sessionId` from state so the reply goes out on the right account; omit only if unknown.
+- On a `trigger_source: "from_me"` message the sender is the owner and the chat is someone else: `to` is still `chatJid`, never the sender. The reply leaves from the owner's number and that chat reads it.
 
 ## Confirm
 
