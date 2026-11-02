@@ -6,6 +6,16 @@
 
 All notable changes to the Chatlytics Claude Code plugin are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- **A summoned direct chat is read by phone** (chatlytics#956). The inbox line now
+  shows the peer's `phone` when the envelope carries `chat_phone`, and the
+  `whatsapp` skill reads that chat with `contact_name` and the owner's session,
+  because `chat_id` is an exact match on one stored form. It also says never to
+  use `session: all` for this chat.
+
 ## [3.1.0] — 2026-11-01
 
 ### Added
