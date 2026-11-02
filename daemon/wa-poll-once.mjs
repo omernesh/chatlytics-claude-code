@@ -44,6 +44,7 @@ import {
   reconnectDelay,
   runStreamOnce,
 } from '../servers/lib/stream.mjs';
+import { formatEnvelope as formatEnvelopeLine, localPart } from '../servers/lib/format-envelope.mjs';
 
 const TOKEN = (process.env.CHATLYTICS_BOT_TOKEN && process.env.CHATLYTICS_BOT_TOKEN.trim()) || '';
 const API = ((process.env.CHATLYTICS_API_URL && process.env.CHATLYTICS_API_URL.trim()) || 'https://node.chatlytics.ai')
@@ -103,12 +104,6 @@ async function ackCursor(cur) {
   } catch { /* fail-open */ }
 }
 
-function localPart(jid) {
-  if (!jid) return '';
-  const i = String(jid).indexOf('@');
-  return i > 0 ? String(jid).slice(0, i) : String(jid);
-}
-
 // Skip session-id-shaped pushnames ("3cf11776_logan") and bare numbers.
 function isBadName(n) {
   if (!n) return true;
@@ -151,27 +146,7 @@ async function resolveName(jid) {
   return name;
 }
 
-function stripSecurity(text) {
-  if (!text) return '';
-  const lines = String(text).split('\n');
-  let i = 0;
-  while (i < lines.length && lines[i].trimStart().startsWith('[SECURITY:')) i++;
-  return lines.slice(i).join('\n').trim();
-}
-
-async function formatEnvelope(env) {
-  const senderJid = env.sender_jid ?? env.entity_jid ?? '';
-  let sender = (env.sender_name && String(env.sender_name).trim()) || '';
-  if (!sender) sender = (await resolveName(senderJid)) || localPart(senderJid) || 'unknown';
-  const text = stripSecurity(env.text ?? '');
-  const editTag = env.edited === true ? ' (edited)' : '';
-  if (env.chat_type === 'group') {
-    let grp = (env.chat_name && String(env.chat_name).trim()) || '';
-    if (!grp) grp = (await resolveName(env.entity_jid)) || localPart(env.entity_jid) || 'group';
-    return `whatsapp message from ${sender}${editTag} in ${grp}: "${text}"`;
-  }
-  return `whatsapp message from ${sender}${editTag}: "${text}"`;
-}
+const formatEnvelope = (env) => formatEnvelopeLine(env, resolveName);
 
 async function pollOnce(cur) {
   const params = { timeout_ms: 55000 };

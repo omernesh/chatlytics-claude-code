@@ -25452,7 +25452,7 @@ function clampLongPollTimeout(value) {
   const n = typeof value === "number" && Number.isFinite(value) ? value : DEFAULT_LONGPOLL_TIMEOUT_MS;
   return Math.min(Math.max(MIN_LONGPOLL_TIMEOUT_MS, n), MAX_LONGPOLL_TIMEOUT_MS);
 }
-var server = new McpServer({ name: "chatlytics", version: "3.0.0" });
+var server = new McpServer({ name: "chatlytics", version: "3.1.0" });
 function looksLikeJid(s) {
   if (typeof s !== "string" || s.length === 0) return false;
   return /@(c\.us|g\.us|lid|newsletter)$/i.test(s);
@@ -25774,7 +25774,7 @@ if (allow("chatlytics_dispatch")) {
 }
 var TRANSPORT = parseTransport(process.env.CHATLYTICS_TRANSPORT, (m) => console.error(`[chatlytics-mcp] ${m}`));
 var STREAM_BUFFER_MAX = Number(process.env.CHATLYTICS_STREAM_BUFFER) || DEFAULT_BUFFER_MAX;
-var PLUGIN_VERSION = "3.0.0";
+var PLUGIN_VERSION = "3.1.0";
 var STREAM_SETTLE_MS = 1e4;
 var STREAM_FAILING_REPORT_MS = 6e4;
 var inbox = AUTH_MODE === "bot_token" ? new StreamInbox({
