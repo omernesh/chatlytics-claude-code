@@ -15,6 +15,13 @@ All notable changes to the Chatlytics Claude Code plugin are documented here.
   shows the owner as sender, the chat they typed in, the session, and who reads
   the reply. `chatlytics_poll` passes `trigger_source` and `chat_name` through
   unchanged. Every other line is unchanged.
+- The chat name on that line is cleaned to one printable line, capped at 80
+  characters and quoted, with a note that it is set by others and is data, not
+  instructions.
+- The `whatsapp` skill now says how to read the summoning chat: with a
+  message-archive tool that takes a session. `chatlytics_read` only reads your
+  own number, so it is the wrong tool; with no such tool, say you can't read the
+  chat.
 
 ## [3.0.0] — 2026-10-19
 
