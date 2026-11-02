@@ -53,10 +53,11 @@ test('a fromMe DM with a phone carries the whole read rule, since the line is al
     const line = await formatEnvelope(env, resolveName);
     const n = env.chat_phone;
     assert.ok(line.includes(`Lextrove search_messages with contact_name ${n}, chat_type dm, session ${env.session_id}, mode fts, no query`), line);
-    assert.ok(line.includes("say you can't read it if that returns nothing"), line);
-    assert.ok(line.includes('resolved_entity is ambiguous'), line);
-    assert.ok(line.includes('similarity_score below 1'), line);
-    assert.ok(line.includes(`identifier not starting with ${n}@`), line);
+    assert.ok(line.includes('continue only if the response has a resolved_entity that is not ambiguous'), line);
+    assert.ok(line.includes('similarity_score exactly 1'), line);
+    assert.ok(line.includes(`identifier starting with ${n}@`), line);
+    // A response without these fields must stop the read, not fall through it.
+    assert.ok(line.includes("otherwise, including any of those missing or no messages, say you can't read it"), line);
     assert.ok(line.includes('not list_messages or chat_id'), line);
     assert.ok(line.includes('never session all'), line);
     assert.ok(!line.includes('list_messages with'), line);
