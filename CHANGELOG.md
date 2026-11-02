@@ -10,11 +10,14 @@ All notable changes to the Chatlytics Claude Code plugin are documented here.
 
 ### Fixed
 
-- **A summoned direct chat is read by phone** (chatlytics#956). The inbox line now
-  shows the peer's `phone` when the envelope carries `chat_phone`, and the
-  `whatsapp` skill reads that chat with `contact_name` and the owner's session,
-  because `chat_id` is an exact match on one stored form. It also says never to
-  use `session: all` for this chat.
+- **A summoned direct chat is read by phone** (chatlytics#956). When the envelope
+  carries `chat_phone`, the inbox line and the `whatsapp` skill read that chat with
+  `search_messages` limited to direct chats and the owner's session. `chat_id` is an
+  exact match on one stored form, and `list_messages` with a contact also returns
+  that person's posts in groups. The read stops if the contact match is ambiguous,
+  inexact or a different number, or if nothing comes back. The inbox line now carries
+  this rule itself and says never to use `session: all`. A `chat_phone` over 15 digits
+  is dropped.
 
 ## [3.1.0] — 2026-11-01
 
