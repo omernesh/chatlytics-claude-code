@@ -8,6 +8,8 @@ All notable changes to the Chatlytics Claude Code plugin are documented here.
 
 ## [Unreleased]
 
+## [3.1.1] — 2026-11-02
+
 ### Fixed
 
 - **A summoned direct chat is read by phone** (chatlytics#956). When the envelope

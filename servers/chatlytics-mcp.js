@@ -207,7 +207,7 @@ function clampLongPollTimeout(value) {
   return Math.min(Math.max(MIN_LONGPOLL_TIMEOUT_MS, n), MAX_LONGPOLL_TIMEOUT_MS);
 }
 
-const server = new McpServer({ name: "chatlytics", version: "3.1.0" });
+const server = new McpServer({ name: "chatlytics", version: "3.1.1" });
 
 // Detect WhatsApp JID-shaped strings. WAHA uses 4 suffix families:
 //   <phone>@c.us           — 1:1 contacts
@@ -690,7 +690,7 @@ if (allow("chatlytics_dispatch")) {
 // `resolveBotFromBearer` (P324) — an operator/admin api_key Bearer would 401.
 const TRANSPORT = parseTransport(process.env.CHATLYTICS_TRANSPORT, (m) => console.error(`[chatlytics-mcp] ${m}`));
 const STREAM_BUFFER_MAX = Number(process.env.CHATLYTICS_STREAM_BUFFER) || DEFAULT_BUFFER_MAX;
-const PLUGIN_VERSION = "3.1.0";
+const PLUGIN_VERSION = "3.1.1";
 // Settle bound for the FIRST poll: how long we wait for the initial stream
 // attempt to answer (hello, 404/426 → long-poll, or auth refusal).
 const STREAM_SETTLE_MS = 10_000;
